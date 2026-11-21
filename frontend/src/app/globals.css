@@ -1,0 +1,283 @@
+@import "tailwindcss";
+
+@layer base {
+  /* ----------------------------------------------------
+     THEME 1: APPLE LIGHT (DEFAULT)
+     ---------------------------------------------------- */
+  :root,
+  [data-theme="light"] {
+    --apple-bg: #f5f5f7;
+    --apple-surface: #ffffff;
+    --apple-surface-translucent: rgba(255, 255, 255, 0.85);
+    
+    --apple-border: rgba(0, 0, 0, 0.08);
+    --apple-border-hover: rgba(0, 0, 0, 0.16);
+
+    --apple-text-primary: #1d1d1f;
+    --apple-text-secondary: #86868b;
+    --apple-text-muted: #a1a1a6;
+
+    --apple-accent: #0071e3;
+    --apple-accent-hover: #0077ed;
+    --apple-accent-light: rgba(0, 113, 227, 0.08);
+
+    --apple-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.06), 0 2px 6px -1px rgba(0, 0, 0, 0.04);
+    --apple-shadow-hover: 0 12px 32px -4px rgba(0, 0, 0, 0.12), 0 4px 12px -2px rgba(0, 0, 0, 0.06);
+
+    --apple-badge-bg: rgba(0, 113, 227, 0.08);
+    --apple-badge-text: #0071e3;
+  }
+
+  /* ----------------------------------------------------
+     THEME 2: APPLE DARK
+     ---------------------------------------------------- */
+  [data-theme="dark"] {
+    --apple-bg: #000000;
+    --apple-surface: #161617;
+    --apple-surface-translucent: rgba(22, 22, 23, 0.85);
+    
+    --apple-border: rgba(255, 255, 255, 0.1);
+    --apple-border-hover: rgba(255, 255, 255, 0.2);
+
+    --apple-text-primary: #f5f5f7;
+    --apple-text-secondary: #86868b;
+    --apple-text-muted: #6e6e73;
+
+    --apple-accent: #2997ff;
+    --apple-accent-hover: #3b9eff;
+    --apple-accent-light: rgba(41, 151, 255, 0.15);
+
+    --apple-shadow: 0 4px 24px -2px rgba(0, 0, 0, 0.5);
+    --apple-shadow-hover: 0 12px 36px -4px rgba(0, 0, 0, 0.7);
+
+    --apple-badge-bg: rgba(41, 151, 255, 0.15);
+    --apple-badge-text: #2997ff;
+  }
+
+  /* ----------------------------------------------------
+     THEME 3: VANILLA CREAM
+     ---------------------------------------------------- */
+  [data-theme="cream"] {
+    --apple-bg: #fcf9f2;
+    --apple-surface: #ffffff;
+    --apple-surface-translucent: rgba(252, 249, 242, 0.85);
+    
+    --apple-border: rgba(200, 185, 165, 0.25);
+    --apple-border-hover: rgba(180, 160, 135, 0.4);
+
+    --apple-text-primary: #2c251e;
+    --apple-text-secondary: #7c7267;
+    --apple-text-muted: #a69c90;
+
+    --apple-accent: #b45309;
+    --apple-accent-hover: #d97706;
+    --apple-accent-light: rgba(180, 83, 9, 0.08);
+
+    --apple-shadow: 0 4px 20px -2px rgba(160, 140, 115, 0.08);
+    --apple-shadow-hover: 0 12px 32px -4px rgba(160, 140, 115, 0.16);
+
+    --apple-badge-bg: rgba(180, 83, 9, 0.1);
+    --apple-badge-text: #b45309;
+  }
+
+  /* ----------------------------------------------------
+     THEME 4: WARM SAND
+     ---------------------------------------------------- */
+  [data-theme="warm"] {
+    --apple-bg: #f3ece0;
+    --apple-surface: #fbf7f0;
+    --apple-surface-translucent: rgba(243, 236, 224, 0.85);
+    
+    --apple-border: rgba(160, 140, 115, 0.2);
+    --apple-border-hover: rgba(140, 120, 95, 0.35);
+
+    --apple-text-primary: #231f1b;
+    --apple-text-secondary: #70675e;
+    --apple-text-muted: #9e948a;
+
+    --apple-accent: #c2410c;
+    --apple-accent-hover: #ea580c;
+    --apple-accent-light: rgba(194, 65, 12, 0.1);
+
+    --apple-shadow: 0 4px 20px -2px rgba(140, 120, 95, 0.1);
+    --apple-shadow-hover: 0 12px 32px -4px rgba(140, 120, 95, 0.2);
+
+    --apple-badge-bg: rgba(194, 65, 12, 0.1);
+    --apple-badge-text: #c2410c;
+  }
+
+  /* ----------------------------------------------------
+     THEME 5: NORDIC SAGE
+     ---------------------------------------------------- */
+  [data-theme="sage"] {
+    --apple-bg: #eff4f1;
+    --apple-surface: #ffffff;
+    --apple-surface-translucent: rgba(239, 244, 241, 0.85);
+    
+    --apple-border: rgba(16, 185, 129, 0.15);
+    --apple-border-hover: rgba(16, 185, 129, 0.3);
+
+    --apple-text-primary: #192c24;
+    --apple-text-secondary: #5e7368;
+    --apple-text-muted: #91a399;
+
+    --apple-accent: #059669;
+    --apple-accent-hover: #10b981;
+    --apple-accent-light: rgba(5, 150, 105, 0.1);
+
+    --apple-shadow: 0 4px 20px -2px rgba(5, 150, 105, 0.08);
+    --apple-shadow-hover: 0 12px 32px -4px rgba(5, 150, 105, 0.18);
+
+    --apple-badge-bg: rgba(5, 150, 105, 0.1);
+    --apple-badge-text: #059669;
+  }
+
+  /* ----------------------------------------------------
+     THEME 6: VELVET OBSIDIAN
+     ---------------------------------------------------- */
+  [data-theme="obsidian"] {
+    --apple-bg: #0c0a12;
+    --apple-surface: #181524;
+    --apple-surface-translucent: rgba(24, 21, 36, 0.85);
+    
+    --apple-border: rgba(168, 85, 247, 0.18);
+    --apple-border-hover: rgba(168, 85, 247, 0.35);
+
+    --apple-text-primary: #f5f3ff;
+    --apple-text-secondary: #a78bfa;
+    --apple-text-muted: #6b7280;
+
+    --apple-accent: #a855f7;
+    --apple-accent-hover: #c084fc;
+    --apple-accent-light: rgba(168, 85, 247, 0.15);
+
+    --apple-shadow: 0 4px 24px -2px rgba(168, 85, 247, 0.15);
+    --apple-shadow-hover: 0 12px 36px -4px rgba(168, 85, 247, 0.3);
+
+    --apple-badge-bg: rgba(168, 85, 247, 0.15);
+    --apple-badge-text: #c084fc;
+  }
+
+  /* ----------------------------------------------------
+     THEME 7: OCEANIC AZURE
+     ---------------------------------------------------- */
+  [data-theme="ocean"] {
+    --apple-bg: #091322;
+    --apple-surface: #112036;
+    --apple-surface-translucent: rgba(17, 32, 54, 0.85);
+    
+    --apple-border: rgba(14, 165, 233, 0.18);
+    --apple-border-hover: rgba(14, 165, 233, 0.35);
+
+    --apple-text-primary: #f0f9ff;
+    --apple-text-secondary: #7dd3fc;
+    --apple-text-muted: #64748b;
+
+    --apple-accent: #0ea5e9;
+    --apple-accent-hover: #38bdf8;
+    --apple-accent-light: rgba(14, 165, 233, 0.15);
+
+    --apple-shadow: 0 4px 24px -2px rgba(14, 165, 233, 0.15);
+    --apple-shadow-hover: 0 12px 36px -4px rgba(14, 165, 233, 0.3);
+
+    --apple-badge-bg: rgba(14, 165, 233, 0.15);
+    --apple-badge-text: #38bdf8;
+  }
+
+  body {
+    background-color: var(--apple-bg);
+    color: var(--apple-text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    min-height: 100vh;
+    transition: background-color 0.3s ease, color 0.3s ease;
+    -webkit-font-smoothing: antialiased;
+    letter-spacing: -0.01em;
+  }
+}
+
+/* ----------------------------------------------------
+   APPLE ULTRA-SLEEK COMPONENTS
+   ---------------------------------------------------- */
+
+.apple-card {
+  background: var(--apple-surface);
+  border-radius: 1.5rem;
+  border: 1px solid var(--apple-border);
+  box-shadow: var(--apple-shadow);
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.apple-card-interactive:hover {
+  border-color: var(--apple-border-hover);
+  box-shadow: var(--apple-shadow-hover);
+  transform: translateY(-2px);
+}
+
+.apple-input {
+  background: var(--apple-bg);
+  border-radius: 0.85rem;
+  border: 1px solid var(--apple-border);
+  color: var(--apple-text-primary);
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.apple-input:focus {
+  border-color: var(--apple-accent);
+  box-shadow: 0 0 0 4px var(--apple-accent-light);
+}
+
+.apple-button-primary {
+  background: var(--apple-accent);
+  color: #ffffff;
+  border-radius: 9999px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 2px 8px -1px var(--apple-accent-light);
+}
+
+.apple-button-primary:hover {
+  background: var(--apple-accent-hover);
+  transform: scale(1.02);
+}
+
+.apple-button-primary:active {
+  transform: scale(0.98);
+}
+
+.apple-button-secondary {
+  background: var(--apple-bg);
+  color: var(--apple-text-primary);
+  border-radius: 9999px;
+  border: 1px solid var(--apple-border);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.apple-button-secondary:hover {
+  border-color: var(--apple-border-hover);
+  background: var(--apple-surface);
+}
+
+.apple-badge {
+  background: var(--apple-badge-bg);
+  color: var(--apple-badge-text);
+  border-radius: 9999px;
+  font-weight: 600;
+  font-size: 0.75rem;
+  padding: 0.25rem 0.75rem;
+  display: inline-flex;
+  items-center: center;
+}
+
+@keyframes apple-pulse {
+  0% { transform: scale(0.95); opacity: 1; }
+  50% { transform: scale(1.25); opacity: 0.5; }
+  100% { transform: scale(0.95); opacity: 1; }
+}
+
+.live-pulse {
+  animation: apple-pulse 2s infinite ease-in-out;
+}
