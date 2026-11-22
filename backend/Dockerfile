@@ -23,8 +23,10 @@ RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 # Copy the current directory contents into the container at /app
 COPY . /app/
 
-# Expose the port FastAPI runs on
+# Expose the default port (7860 for Hugging Face Spaces compatibility, 8000 for local docker)
+ENV PORT=7860
+EXPOSE 7860
 EXPOSE 8000
 
-# Command to run the application
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Command to run the application using $PORT dynamically
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-7860}"]
