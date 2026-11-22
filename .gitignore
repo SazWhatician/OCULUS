@@ -30,3 +30,9 @@ Thumbs.db
 .vscode/
 .idea/
 *.log
+
+# Databases and Local Storage
+*.db
+*.sqlite
+tmp_storage/
+backend/tmp_storage/
