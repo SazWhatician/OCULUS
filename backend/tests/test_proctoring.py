@@ -1,6 +1,8 @@
 import asyncio
+import pytest
 from app.services.proctoring_service import get_proctoring_service
 
+@pytest.mark.asyncio
 async def test_proctoring_ai_reliance():
     svc = get_proctoring_service()
     suspicious_transcript = {

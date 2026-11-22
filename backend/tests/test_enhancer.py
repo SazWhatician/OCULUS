@@ -26,6 +26,9 @@ def test_utterance_stitching():
     assert stitched[0]["text"] == "I used FastAPI and PostgreSQL for backend"
     assert stitched[2]["text"] == "We deployed on Kubernetes with Docker containers"
 
+import pytest
+
+@pytest.mark.asyncio
 async def test_sarvam_service_mock():
     stt = SarvamSTTService()
     res = await stt.transcribe_audio_bytes(b"dummy_audio", language_code="en-IN")
