@@ -8,14 +8,12 @@ ENV PYTHONUNBUFFERED=1
 # Set work directory
 WORKDIR /app
 
-# Install system dependencies (WeasyPrint needs these for PDF generation if used)
+# Install system dependencies (ffmpeg for demo audio/frame splitting)
 RUN apt-get update && apt-get install -y \
     build-essential \
-    libpango-1.0-0 \
-    libpangoft2-1.0-0 \
-    libffi-dev \
-    libjpeg-dev \
-    libopenjp2-7-dev \
+    ffmpeg \
+    libgl1 \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies

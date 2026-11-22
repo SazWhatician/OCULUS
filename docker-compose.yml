@@ -1,0 +1,47 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: oculus_postgres
+    environment:
+      POSTGRES_USER: oculus
+      POSTGRES_PASSWORD: oculus_password
+      POSTGRES_DB: oculus
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: oculus_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+  sentinel_api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: oculus_sentinel_api
+    ports:
+      - "8000:8000"
+    environment:
+      - DEPLOY_MODE=single_node
+      - DATABASE_URL=postgresql+asyncpg://oculus:oculus_password@postgres:5432/oculus
+      - REDIS_URL=redis://redis:6379/0
+      - STT_PROVIDER=hybrid
+      - STORAGE_PROVIDER=local
+      - PUBLIC_API_URL=http://localhost:8000
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./backend/tmp_storage:/app/tmp_storage
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
