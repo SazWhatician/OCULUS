@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import OculusNavbar from "@/components/OculusNavbar";
+import OculusLoader from "@/components/OculusLoader";
 
 export const metadata: Metadata = {
   title: "OCULUS Sentinel — AI Interview Integrity Platform",
@@ -19,6 +20,7 @@ export default function RootLayout({
   return (
     <html lang="en" data-theme="light">
       <body className="min-h-screen flex flex-col bg-[var(--oculus-bg)] text-[var(--oculus-ink)] font-sans antialiased selection:bg-[var(--oculus-ink)] selection:text-[var(--oculus-bg)]">
+        <OculusLoader oncePerSession={false} />
         <OculusNavbar />
         <main className="w-full flex-1 pt-[74px]">{children}</main>
         <footer className="border-t border-[var(--oculus-hairline)] bg-[var(--oculus-surface)] px-6 py-10 font-mono text-xs uppercase tracking-[0.2em] text-[var(--oculus-muted)]">
