@@ -42,6 +42,13 @@
 
     --apple-badge-bg: rgba(0, 113, 227, 0.08);
     --apple-badge-text: #0071e3;
+
+    /* OCULUS Brutalist Optical Tokens */
+    --oculus-bg: #EAE6DF;
+    --oculus-surface: #E3DFD7;
+    --oculus-ink: #0A0A0A;
+    --oculus-muted: #6E6A62;
+    --oculus-hairline: rgba(10, 10, 10, 0.12);
   }
 
   /* ----------------------------------------------------
@@ -68,6 +75,13 @@
 
     --apple-badge-bg: rgba(41, 151, 255, 0.15);
     --apple-badge-text: #2997ff;
+
+    /* OCULUS Brutalist Optical Tokens */
+    --oculus-bg: #0D0D0E;
+    --oculus-surface: #151517;
+    --oculus-ink: #F2EFE9;
+    --oculus-muted: #8E8A82;
+    --oculus-hairline: rgba(242, 239, 233, 0.14);
   }
 
   /* ----------------------------------------------------

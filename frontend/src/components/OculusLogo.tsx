@@ -1,0 +1,36 @@
+"use client";
+
+import React from "react";
+
+export interface OculusLogoProps {
+  className?: string;
+  pupilRef?: React.Ref<SVGCircleElement>;
+  pupilOffset?: { x: number; y: number };
+  pupilRadius?: number;
+}
+
+export default function OculusLogo({
+  className = "w-10 h-7",
+  pupilRef,
+  pupilOffset = { x: 0, y: 0 },
+  pupilRadius = 36.4,
+}: OculusLogoProps) {
+  return (
+    <svg
+      viewBox="0 0 480 360"
+      className={`overflow-visible fill-current ${className}`}
+      aria-hidden="true"
+    >
+      <path
+        fillRule="evenodd"
+        d="M2,102L1,152L150,66L171,56L192,49L216,44L256,43L293,50L315,58L438,128L439,130L404,151L395,154L305,102L290,95L270,89L249,86L218,88L205,91L182,100L1,204L1,257L129,331L156,344L176,351L215,359L258,360L282,357L311,350L351,333L479,259L479,209L336,292L314,303L295,310L267,316L225,317L192,311L167,302L44,232L44,229L86,205L177,258L200,268L232,274L265,272L287,266L306,257L478,158L479,102L353,29L333,19L309,10L280,3L255,0L215,1L172,10L130,28Z M130,180L209,135L234,129L257,130L281,138L349,177L352,180L274,225L249,231L225,230L205,224L133,183Z"
+      />
+      <circle
+        ref={pupilRef}
+        cx={240 + pupilOffset.x}
+        cy={180 + pupilOffset.y}
+        r={pupilRadius}
+      />
+    </svg>
+  );
+}
