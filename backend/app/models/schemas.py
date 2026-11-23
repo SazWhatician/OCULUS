@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal, List, Dict, Optional
 from pydantic import BaseModel, Field
 
@@ -48,5 +48,5 @@ class ProctoringReport(BaseModel):
     weights_version: str = "default-v1"
     status: Literal["ok", "degraded", "failed"]
     delivery_features_available: bool = False
-    generated_at: datetime = Field(default_factory=datetime.utcnow)
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     elapsed_ms: int = 0

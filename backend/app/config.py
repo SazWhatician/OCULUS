@@ -1,5 +1,6 @@
 import os
-from typing import Literal, Optional
+from typing import Literal, Optional, Any
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,6 +15,13 @@ class Settings(BaseSettings):
     DEPLOY_MODE: Literal["single_node", "distributed"] = "single_node"
     APP_ENV: str = "development"
     DEBUG: bool = False
+
+    @field_validator("DEBUG", mode="before")
+    @classmethod
+    def parse_debug(cls, v: Any) -> bool:
+        if isinstance(v, str):
+            return v.lower() in ("true", "1", "t", "yes", "debug")
+        return bool(v)
 
     # Provider Switches
     INGESTION_PROVIDER: Literal["demo_file", "browser_webrtc", "attendee_bot"] = "demo_file"

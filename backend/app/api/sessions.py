@@ -22,6 +22,9 @@ from app.schemas.contracts import (
 from app.services.vocab_extractor import extract_custom_vocab
 from app.adapters.ingestion.attendee import AttendeeBotAdapter
 from app.db.storage import get_storage_adapter
+from app.db.redis_bus import redis_bus
+from app.services.aggregator import generate_integrity_report
+from app.schemas.contracts import CandidateBaseline, QAPairEvaluation, VisionAnomalyEvent, VisionAnomalyType
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
 attendee_adapter = AttendeeBotAdapter()
@@ -147,6 +150,75 @@ async def swap_speakers(session_id: str, req: SwapSpeakerRequest, db: AsyncSessi
     s.speaker_role_map = req.speaker_role_map
     await db.commit()
     return {"session_id": session_id, "speaker_role_map": s.speaker_role_map}
+
+
+@router.post("/{session_id}/complete")
+async def complete_session(session_id: str, db: AsyncSession = Depends(get_db)):
+    s = await db.get(SessionModel, session_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    s.status = SessionStatus.COMPLETED.value
+    await db.commit()
+
+    # Re-aggregate report if not present or needs finalization
+    rep_stmt = select(IntegrityReportModel).where(IntegrityReportModel.session_id == session_id)
+    rep_res = await db.execute(rep_stmt)
+    rep = rep_res.scalars().first()
+
+    if not rep:
+        # Generate final report from stored evaluations
+        all_qas_stmt = select(QAEvaluationModel).where(QAEvaluationModel.session_id == session_id)
+        all_qas_res = await db.execute(all_qas_stmt)
+        evaluations = [QAPairEvaluation.model_validate(r.payload_json) for r in all_qas_res.scalars().all()]
+
+        all_v_stmt = select(VisionEventModel).where(VisionEventModel.session_id == session_id)
+        all_v_res = await db.execute(all_v_stmt)
+        all_vision = [
+            VisionAnomalyEvent(
+                event_id=r.id,
+                session_id=r.session_id,
+                timestamp_ms=r.timestamp_ms,
+                anomaly_type=VisionAnomalyType(r.anomaly_type),
+                duration_ms=r.duration_ms,
+                confidence=r.confidence,
+                evidence_frame_key=r.evidence_frame_key,
+                vlm_verification_note=r.vlm_verification_note,
+            )
+            for r in all_v_res.scalars().all()
+        ]
+
+        baseline = CandidateBaseline.model_validate(s.baseline_json) if s.baseline_json else None
+        final_report = generate_integrity_report(
+            session_id=session_id,
+            candidate_name=s.candidate_name,
+            job_title=s.job_title,
+            qa_evaluations=evaluations,
+            vision_timeline=all_vision,
+            baseline=baseline,
+        )
+        rep = IntegrityReportModel(
+            session_id=session_id,
+            overall_risk_score=final_report.overall_risk_score,
+            risk_band=final_report.risk_band.value,
+            report_json=final_report.model_dump(),
+        )
+        db.add(rep)
+        await db.commit()
+
+    await redis_bus.broadcast_ui(
+        session_id=session_id,
+        event_type="STATUS_UPDATE",
+        data={"status": SessionStatus.COMPLETED.value, "overall_risk_score": rep.overall_risk_score, "risk_band": rep.risk_band},
+    )
+
+    return {
+        "session_id": session_id,
+        "status": s.status,
+        "overall_risk_score": rep.overall_risk_score,
+        "risk_band": rep.risk_band,
+        "report": rep.report_json,
+    }
 
 
 @router.get("/{session_id}/report")

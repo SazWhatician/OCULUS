@@ -51,3 +51,13 @@ async def test_api_health_and_sessions():
         res_list = await client.get("/api/v1/sessions")
         assert res_list.status_code == 200
         assert len(res_list.json()["sessions"]) >= 1
+
+        # 7. Complete session
+        res_comp = await client.post(f"/api/v1/sessions/{session_id}/complete")
+        assert res_comp.status_code == 200
+        assert res_comp.json()["status"] == "COMPLETED"
+
+        # 8. Get session report
+        res_rep = await client.get(f"/api/v1/sessions/{session_id}/report")
+        assert res_rep.status_code == 200
+        assert "overall_risk_score" in res_rep.json()
