@@ -44,17 +44,21 @@
     --apple-badge-text: #0071e3;
 
     /* OCULUS Brutalist Optical Tokens */
-    --oculus-bg: #EAE6DF;
-    --oculus-surface: #E3DFD7;
+    --oculus-bg: #FBFBF9;
+    --oculus-surface: #FFFFFF;
     --oculus-ink: #0A0A0A;
-    --oculus-muted: #6E6A62;
+    --oculus-muted: #6E6E6A;
     --oculus-hairline: rgba(10, 10, 10, 0.12);
+    --oculus-canvas-stroke: rgba(10, 10, 10, 0.045);
+    --oculus-canvas-fill: rgba(10, 10, 10, 0.18);
+    --oculus-canvas-reticle: rgba(10, 10, 10, 0.11);
   }
 
   /* ----------------------------------------------------
-     THEME 2: APPLE DARK
+     THEME 2: APPLE DARK / OCULUS INVERTED
      ---------------------------------------------------- */
-  [data-theme="dark"] {
+  [data-theme="dark"],
+  .dark {
     --apple-bg: #000000;
     --apple-surface: #161617;
     --apple-surface-translucent: rgba(22, 22, 23, 0.85);
@@ -76,12 +80,15 @@
     --apple-badge-bg: rgba(41, 151, 255, 0.15);
     --apple-badge-text: #2997ff;
 
-    /* OCULUS Brutalist Optical Tokens */
-    --oculus-bg: #0D0D0E;
-    --oculus-surface: #151517;
-    --oculus-ink: #F2EFE9;
-    --oculus-muted: #8E8A82;
-    --oculus-hairline: rgba(242, 239, 233, 0.14);
+    /* OCULUS Brutalist Optical Tokens - Inverted Polarity */
+    --oculus-bg: #0A0A0A;
+    --oculus-surface: #141414;
+    --oculus-ink: #FBFBF9;
+    --oculus-muted: #9E9E98;
+    --oculus-hairline: rgba(251, 251, 249, 0.14);
+    --oculus-canvas-stroke: rgba(251, 251, 249, 0.045);
+    --oculus-canvas-fill: rgba(251, 251, 249, 0.22);
+    --oculus-canvas-reticle: rgba(251, 251, 249, 0.14);
   }
 
   /* ----------------------------------------------------

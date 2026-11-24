@@ -65,7 +65,20 @@ export function OpticalFieldCanvas() {
       };
     };
 
+    const isDark = () => {
+      if (typeof document === "undefined") return false;
+      const theme = document.documentElement.getAttribute("data-theme");
+      return (
+        theme === "dark" ||
+        theme === "obsidian" ||
+        theme === "ocean" ||
+        document.documentElement.classList.contains("dark")
+      );
+    };
+
     const render = () => {
+      const dark = isDark();
+
       if (pointer.active) {
         pointer.x += (pointer.tx - pointer.x) * 0.1;
         pointer.y += (pointer.ty - pointer.y) * 0.1;
@@ -75,7 +88,9 @@ export function OpticalFieldCanvas() {
       }
 
       ctx.clearRect(0, 0, width, height);
-      ctx.strokeStyle = "rgba(10, 10, 10, 0.045)";
+      ctx.strokeStyle = dark
+        ? "rgba(251, 251, 249, 0.055)"
+        : "rgba(10, 10, 10, 0.045)";
       ctx.lineWidth = 1;
 
       const cols = Math.ceil(width / spacing) + 1;
@@ -103,7 +118,9 @@ export function OpticalFieldCanvas() {
         ctx.stroke();
       }
 
-      ctx.fillStyle = "rgba(10, 10, 10, 0.18)";
+      ctx.fillStyle = dark
+        ? "rgba(251, 251, 249, 0.24)"
+        : "rgba(10, 10, 10, 0.18)";
       for (let c = 0; c <= cols; c += 2) {
         for (let r = 0; r <= rows; r += 2) {
           const p = displace(c * spacing, r * spacing);
@@ -114,7 +131,9 @@ export function OpticalFieldCanvas() {
       if (pointer.active && pointer.x > -200) {
         ctx.beginPath();
         ctx.arc(pointer.x, pointer.y, 44, 0, Math.PI * 2);
-        ctx.strokeStyle = "rgba(10, 10, 10, 0.11)";
+        ctx.strokeStyle = dark
+          ? "rgba(251, 251, 249, 0.16)"
+          : "rgba(10, 10, 10, 0.11)";
         ctx.setLineDash([2, 6]);
         ctx.stroke();
         ctx.setLineDash([]);
@@ -185,8 +204,8 @@ export function OculusMark({
       const nx = (e.clientX - cx) / (window.innerWidth * 0.5);
       const ny = (e.clientY - cy) / (window.innerHeight * 0.5);
 
-      const maxRx = 18;
-      const maxRy = 7.5;
+      const maxRx = 40;
+      const maxRy = 16;
       const angle = Math.atan2(ny, nx);
       const mag = Math.min(Math.hypot(nx, ny), 1);
 
@@ -219,23 +238,23 @@ export function OculusMark({
       }
 
       if (s.pulseO > 0.005) {
-        s.pulseR += 1.65;
+        s.pulseR += 3.8;
         s.pulseO *= 0.93;
       } else {
         s.pulseO = 0;
       }
 
-      const pupilR = 11.8 + Math.min(speed * 1.4, 2.6);
+      const pupilR = 36.4 + Math.min(speed * 2.2, 5.5);
 
       if (pupilRef.current) {
-        pupilRef.current.setAttribute("cx", (100 + s.px).toFixed(2));
-        pupilRef.current.setAttribute("cy", (70 + s.py).toFixed(2));
+        pupilRef.current.setAttribute("cx", (240 + s.px).toFixed(2));
+        pupilRef.current.setAttribute("cy", (180 + s.py).toFixed(2));
         pupilRef.current.setAttribute("r", pupilR.toFixed(2));
       }
 
       if (pulseRef.current) {
-        pulseRef.current.setAttribute("cx", (100 + s.px).toFixed(2));
-        pulseRef.current.setAttribute("cy", (70 + s.py).toFixed(2));
+        pulseRef.current.setAttribute("cx", (240 + s.px).toFixed(2));
+        pulseRef.current.setAttribute("cy", (180 + s.py).toFixed(2));
         pulseRef.current.setAttribute("r", s.pulseR.toFixed(2));
         pulseRef.current.setAttribute("opacity", s.pulseO.toFixed(3));
       }
@@ -243,35 +262,31 @@ export function OculusMark({
       if (ringOuterRef.current) {
         ringOuterRef.current.setAttribute(
           "transform",
-          `rotate(${s.rot.toFixed(2)} 100 70)`
+          `rotate(${s.rot.toFixed(2)} 240 180)`
         );
       }
 
       if (ringInnerRef.current) {
         ringInnerRef.current.setAttribute(
           "transform",
-          `rotate(${(-s.rot * 1.45).toFixed(2)} 100 70)`
+          `rotate(${(-s.rot * 1.45).toFixed(2)} 240 180)`
         );
       }
 
-      const shear = scrollRatio * 10;
-      if (upperBandRef.current && lowerBandRef.current) {
+      const shear = scrollRatio * 12;
+      if (upperBandRef.current) {
         upperBandRef.current.setAttribute(
           "transform",
-          `translate(${shear.toFixed(2)} ${(-shear * 0.45).toFixed(2)})`
-        );
-        lowerBandRef.current.setAttribute(
-          "transform",
-          `translate(${(-shear).toFixed(2)} ${(shear * 0.45).toFixed(2)})`
+          `translate(${shear.toFixed(2)} ${(-shear * 0.35).toFixed(2)})`
         );
       }
 
       if (onTelemetry && now - lastEmit > 60) {
         lastEmit = now;
         onTelemetry({
-          yaw: Number(((s.px / 18) * 32).toFixed(1)),
-          pitch: Number(((-s.py / 7.5) * 18).toFixed(1)),
-          dilation: Number((pupilR / 11.8).toFixed(2)),
+          yaw: Number(((s.px / 40) * 32).toFixed(1)),
+          pitch: Number(((-s.py / 16) * 18).toFixed(1)),
+          dilation: Number((pupilR / 36.4).toFixed(2)),
           velocity: Number((speed * 14).toFixed(1)),
         });
       }
@@ -288,7 +303,7 @@ export function OculusMark({
   }, [onTelemetry, scrollRatio]);
 
   const triggerCalibration = () => {
-    stateRef.current.pulseR = 12;
+    stateRef.current.pulseR = 36;
     stateRef.current.pulseO = 0.85;
     stateRef.current.blink = 0.1;
     setCalibrating(true);
@@ -299,13 +314,13 @@ export function OculusMark({
     const deg = i * 5;
     const rad = (deg * Math.PI) / 180;
     const major = i % 6 === 0;
-    const r1 = major ? 80 : 83.5;
-    const r2 = 87;
+    const r1 = major ? 200 : 208;
+    const r2 = 216;
     return {
-      x1: 100 + Math.cos(rad) * r1,
-      y1: 70 + Math.sin(rad) * r1,
-      x2: 100 + Math.cos(rad) * r2,
-      y2: 70 + Math.sin(rad) * r2,
+      x1: 240 + Math.cos(rad) * r1,
+      y1: 180 + Math.sin(rad) * r1,
+      x2: 240 + Math.cos(rad) * r2,
+      y2: 180 + Math.sin(rad) * r2,
       major,
     };
   });
@@ -323,17 +338,17 @@ export function OculusMark({
     >
       <svg
         ref={svgRef}
-        viewBox="0 -25 200 190"
-        className="h-[250px] w-[300px] overflow-visible sm:h-[310px] sm:w-[370px] lg:h-[360px] lg:w-[430px]"
+        viewBox="-60 -50 600 460"
+        className="h-[250px] w-[300px] overflow-visible text-[var(--oculus-ink)] sm:h-[310px] sm:w-[370px] lg:h-[360px] lg:w-[430px]"
       >
         <g ref={ringOuterRef} opacity="0.28">
           <circle
-            cx="100"
-            cy="70"
-            r="87"
+            cx="240"
+            cy="180"
+            r="216"
             fill="none"
-            stroke="#0A0A0A"
-            strokeWidth="0.45"
+            stroke="currentColor"
+            strokeWidth="1"
           />
           {ticks.map((t, i) => (
             <line
@@ -342,60 +357,47 @@ export function OculusMark({
               y1={t.y1}
               x2={t.x2}
               y2={t.y2}
-              stroke="#0A0A0A"
-              strokeWidth={t.major ? "0.9" : "0.4"}
+              stroke="currentColor"
+              strokeWidth={t.major ? "2" : "1"}
             />
           ))}
         </g>
 
         <g ref={ringInnerRef} opacity="0.22">
           <circle
-            cx="100"
-            cy="70"
-            r="72"
+            cx="240"
+            cy="180"
+            r="175"
             fill="none"
-            stroke="#0A0A0A"
-            strokeWidth="0.5"
-            strokeDasharray="3 9"
+            stroke="currentColor"
+            strokeWidth="1"
+            strokeDasharray="6 18"
           />
-          <line x1="100" y1="-8" x2="100" y2="2" stroke="#0A0A0A" strokeWidth="0.7" />
-          <line x1="100" y1="138" x2="100" y2="148" stroke="#0A0A0A" strokeWidth="0.7" />
-          <line x1="12" y1="70" x2="22" y2="70" stroke="#0A0A0A" strokeWidth="0.7" />
-          <line x1="178" y1="70" x2="188" y2="70" stroke="#0A0A0A" strokeWidth="0.7" />
+          <line x1="240" y1="-25" x2="240" y2="5" stroke="currentColor" strokeWidth="1.5" />
+          <line x1="240" y1="355" x2="240" y2="385" stroke="currentColor" strokeWidth="1.5" />
+          <line x1="-35" y1="180" x2="-5" y2="180" stroke="currentColor" strokeWidth="1.5" />
+          <line x1="485" y1="180" x2="515" y2="180" stroke="currentColor" strokeWidth="1.5" />
         </g>
 
         <g className="oculus-aperture">
           <path
             ref={upperBandRef}
-            d="M 20 51 C 70 7, 130 7, 180 54 L 152 71 C 118 103, 82 103, 47 69"
-            fill="none"
-            stroke="#0A0A0A"
-            strokeWidth="12.5"
-            strokeLinecap="butt"
-            strokeLinejoin="miter"
-            strokeMiterlimit="3"
-          />
-          <path
-            ref={lowerBandRef}
-            d="M 180 89 C 130 133, 70 133, 20 86 L 48 69 C 82 37, 118 37, 153 71"
-            fill="none"
-            stroke="#0A0A0A"
-            strokeWidth="12.5"
-            strokeLinecap="butt"
-            strokeLinejoin="miter"
-            strokeMiterlimit="3"
+            fillRule="evenodd"
+            d="M2,102L1,152L150,66L171,56L192,49L216,44L256,43L293,50L315,58L438,128L439,130L404,151L395,154L305,102L290,95L270,89L249,86L218,88L205,91L182,100L1,204L1,257L129,331L156,344L176,351L215,359L258,360L282,357L311,350L351,333L479,259L479,209L336,292L314,303L295,310L267,316L225,317L192,311L167,302L44,232L44,229L86,205L177,258L200,268L232,274L265,272L287,266L306,257L478,158L479,102L353,29L333,19L309,10L280,3L255,0L215,1L172,10L130,28Z M130,180L209,135L234,129L257,130L281,138L349,177L352,180L274,225L249,231L225,230L205,224L133,183Z"
+            fill="currentColor"
+            className="transition-transform duration-500 ease-[cubic-bezier(0.19,1,0.22,1)] group-hover:scale-[1.01]"
           />
           <circle
             ref={pulseRef}
-            cx="100"
-            cy="70"
-            r="12"
+            cx="240"
+            cy="180"
+            r="36"
             fill="none"
-            stroke="#0A0A0A"
-            strokeWidth="0.9"
+            stroke="currentColor"
+            strokeWidth="2"
             opacity="0"
           />
-          <circle ref={pupilRef} cx="100" cy="70" r="11.8" fill="#0A0A0A" />
+          <circle ref={pupilRef} cx="240" cy="180" r="36.4" fill="currentColor" />
         </g>
       </svg>
 

@@ -1,102 +1,115 @@
+import asyncio
 import hashlib
-import json
+import logging
 import re
 import statistics
 import time
-import os
-import logging
-from datetime import datetime
-from typing import Any, Literal, List, Dict, Tuple, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field
+
+from app.adapters.llm.base import FallbackLLMRouter, ForensicReasoningToolkit
+from app.config import settings
 from app.models.schemas import (
     AnswerProctoring,
     ProctoringFinding,
     ProctoringReport,
 )
+from app.schemas.contracts import (
+    CandidateBaseline,
+    ConfidenceBand,
+    HeuristicScores,
+    LLMJudgeVerdict,
+)
+from app.services.heuristics import (
+    compute_candidate_baseline,
+    compute_deterministic_heuristics,
+)
+from app.services.vision_proctoring import get_vision_service
 
-logger = logging.getLogger("verimeet-proctoring")
+logger = logging.getLogger("oculus.proctoring.service")
 
-PROCTORING_MODEL_VERSION = "1.0.0"
+PROCTORING_MODEL_VERSION = "2.0.0-oculus-multimodal"
 MIN_WORDS_FOR_SCORING = 10
+MIN_WORDS_FOR_SUBSTANTIVE_AGG = 25
 TOKEN_BUDGET_QA_LIMIT = 25
+DEFAULT_MAX_LLM_TURNS_PER_SESSION = 6
+DEFAULT_LLM_MAX_CONCURRENCY = 2
+ESTIMATED_WPM_FALLBACK = 135.0
+
+ADVISORY_CAVEAT = (
+    "This report is advisory only. Multimodal transcript and webcam behavioral inference "
+    "cannot definitively prove AI assistance and must never be used as the sole basis "
+    "for hiring decisions. Use these signals and follow-up probes to guide human review."
+)
+
+# High-precision linguistic banks (removes false-positive everyday words like "so", "in order to", "certainly")
+FILLER_SINGLE = frozenset({
+    "um", "uh", "uhh", "umm", "er", "erm", "ah", "ahh",
+    "basically", "actually", "literally", "hmm", "mhm",
+})
+FILLER_MULTI = (
+    "you know", "i mean", "kind of", "sort of", "i guess", "you see",
+)
+
+AI_TELL_PATTERNS = (
+    re.compile(r"\bdelve\s+into\b", re.I),
+    re.compile(r"\bit'?s\s+(?:crucial|important|essential)\s+to\s+note\b", re.I),
+    re.compile(r"\bmultifaceted\b", re.I),
+    re.compile(r"\btapestry\s+of\b", re.I),
+    re.compile(r"\bever[- ]evolving\s+(?:landscape|ecosystem|field)\b", re.I),
+    re.compile(r"\bplays?\s+a\s+(?:crucial|vital|pivotal)\s+role\b", re.I),
+    re.compile(r"\bcomprehensive\s+(?:approach|understanding|overview|framework)\b", re.I),
+    re.compile(r"\bseamlessly\s+integrat(?:e|es|ed|ing)\b", re.I),
+    re.compile(r"\bharness(?:ing)?\s+the\s+power\s+of\b", re.I),
+    re.compile(r"\bfoster(?:s|ing)?\s+(?:a\s+sense\s+of\s+)?synergy\b", re.I),
+    re.compile(r"\bholistic\s+(?:approach|view|perspective|strategy)\b", re.I),
+    re.compile(r"\btestament\s+to\b", re.I),
+    re.compile(r"\bin\s+conclusion\b", re.I),
+    re.compile(r"\bin\s+summary\b", re.I),
+    re.compile(r"\bmoreover\b", re.I),
+    re.compile(r"\bfurthermore\b", re.I),
+    re.compile(r"\bkey\s+takeaways?\b", re.I),
+)
+
+STRUCTURE_MARKERS = (
+    re.compile(r"\bfirstly\b", re.I),
+    re.compile(r"\bsecondly\b", re.I),
+    re.compile(r"\bthirdly\b", re.I),
+    re.compile(r"\blastly\b", re.I),
+    re.compile(r"\bin\s+addition\b", re.I),
+    re.compile(r"\bon\s+the\s+other\s+hand\b", re.I),
+    re.compile(r"^\s*\d+[\.\)]\s", re.M),
+)
+
+SELF_REFS = frozenset({
+    "i", "i'm", "im", "i've", "ive", "i'll", "i'd",
+    "my", "me", "myself", "mine", "we", "our", "ours",
+})
+
+# Maps vision_proctoring.py category strings to heuristics.py canonical VisionAnomalyType names
+VISION_CATEGORY_TO_HEURISTIC_TYPE: Dict[str, str] = {
+    "Phone / Device Detected": "DEVICE_DETECTED",
+    "Multi-Face Detection": "MULTI_FACE",
+    "Liveness / Spoof Risk": "DEVICE_DETECTED",
+    "Frozen Video Feed": "GAZE_DEVIATION",
+    "Gaze Deviation (Looking Away)": "GAZE_DEVIATION",
+    "Teleprompter Reading Pattern": "GAZE_DEVIATION",
+    "Head Pose Shift": "HEAD_PITCH_DOWN",
+    "Camera Occlusion": "GAZE_DEVIATION",
+    "Face Absent From Frame": "GAZE_DEVIATION",
+}
+
 
 def question_hash(question: str) -> str:
     normalised = re.sub(r"\s+", " ", (question or "").strip().lower())
     return hashlib.sha256(normalised.encode("utf-8")).hexdigest()[:32]
 
-ADVISORY_CAVEAT = (
-    "This report is advisory only. Transcript-based authenticity scoring cannot "
-    "definitively detect AI assistance and should never be used as the sole basis "
-    "for hiring decisions. Use it to inform human review, not replace it."
-)
-
-FILLER_SINGLE = {
-    "um", "uh", "uhh", "umm", "er", "erm", "ah", "ahh",
-    "like", "basically", "actually", "literally", "honestly",
-    "right", "okay", "well", "so", "hmm", "mhm", "yeah",
-}
-FILLER_MULTI = [
-    "you know", "i mean", "kind of", "sort of",
-    "i guess", "i think", "you see",
-]
-
-AI_TELL_PATTERNS = [
-    r"\bit'?s important to note\b",
-    r"\bthere are several\b",
-    r"\bthere are many\b",
-    r"\blet me break (this|that|it) down\b",
-    r"\bcertainly\b",
-    r"\bas we can see\b",
-    r"\bin conclusion\b",
-    r"\bmoreover\b",
-    r"\bfurthermore\b",
-    r"\badditionally\b",
-    r"\bin summary\b",
-    r"\bto summarize\b",
-    r"\bdelve into\b",
-    r"\btapestry of\b",
-    r"\brealm of\b",
-    r"\blandscape of\b",
-    r"\bplays a (crucial|vital|key|significant|pivotal) role\b",
-    r"\bit'?s worth noting\b",
-    r"\bthat'?s a (great|excellent|good) question\b",
-    r"\bcomprehensive (approach|understanding|overview)\b",
-    r"\bmultifaceted\b",
-    r"\bnavigate the\b",
-    r"\bseamlessly integrate\b",
-    r"\bparadigm shift\b",
-    r"\bcutting-edge\b",
-    r"\bstate-of-the-art\b",
-    r"\bgame changer\b",
-    r"\bsynergy\b",
-    r"\bholistic\b",
-    r"\brobust and scalable\b",
-    r"\bharness the power\b",
-    r"\btestament to\b",
-    r"\bbeacon of\b",
-    r"\bin order to\b",
-    r"\bkey takeaway\b",
-]
-
-STRUCTURE_MARKERS = [
-    r"\bfirst(?:ly)?\b",
-    r"\bsecond(?:ly)?\b",
-    r"\bthird(?:ly)?\b",
-    r"\blastly\b",
-    r"\bfinally\b",
-    r"\bin addition\b",
-    r"\bon the other hand\b",
-    r"^\s*\d+[\.\)]\s",
-]
-
-SELF_REFS = {
-    "i", "i'm", "im", "i've", "ive", "i'll", "ill", "i'd", "id",
-    "my", "me", "myself", "mine", "we", "our",
-}
 
 def tokenize(text: str) -> List[str]:
-    return re.findall(r"\b[\w']+\b", text.lower())
+    return re.findall(r"\b[\w']+\b", (text or "").lower())
+
 
 def disfluency_rate(text: str) -> float:
     if not text:
@@ -106,17 +119,16 @@ def disfluency_rate(text: str) -> float:
         return 0.0
     single = sum(1 for t in tokens if t in FILLER_SINGLE)
     text_lower = text.lower()
-    multi = 0
-    for phrase in FILLER_MULTI:
-        multi += len(re.findall(rf"\b{re.escape(phrase)}\b", text_lower))
+    multi = sum(len(re.findall(rf"\b{re.escape(p)}\b", text_lower)) for p in FILLER_MULTI)
     return (single + multi) / len(tokens)
+
 
 def self_reference_rate(text: str) -> float:
     tokens = tokenize(text)
     if not tokens:
         return 0.0
-    refs = sum(1 for t in tokens if t in SELF_REFS)
-    return refs / len(tokens)
+    return sum(1 for t in tokens if t in SELF_REFS) / len(tokens)
+
 
 def concreteness_per_100w(text: str) -> float:
     if not text:
@@ -124,38 +136,50 @@ def concreteness_per_100w(text: str) -> float:
     tokens = tokenize(text)
     if not tokens:
         return 0.0
-    numbers = len(re.findall(r"\b\d+(?:\.\d+)?\b", text))
-    years = len(re.findall(r"\b(?:19|20)\d{2}\b", text))
+    # Count numeric metrics/years once (fixes double-counting years) + named/technical entities
+    numbers = len(re.findall(r"\b\d+(?:\.\d+)?%?\b", text))
+    acronyms_or_camel = len(re.findall(r"\b(?:[A-Z]{2,}|[A-Z][a-z]+[A-Z][A-Za-z0-9]*)\b", text))
     sentences = re.split(r"[.!?]+\s*", text)
     capitalized_mid = 0
     for sent in sentences:
         words = sent.strip().split()
         for word in words[1:]:
-            if word and len(word) > 1 and word[0].isupper() and word[1:].islower():
+            if len(word) > 1 and word[0].isupper() and word[1:].islower():
                 capitalized_mid += 1
-    return (numbers + years + capitalized_mid) / (len(tokens) / 100)
+    return (numbers + acronyms_or_camel + capitalized_mid) / (len(tokens) / 100.0)
+
 
 def ai_tell_matches(text: str) -> List[str]:
     if not text:
         return []
-    text_lower = text.lower()
     matches: List[str] = []
     for pattern in AI_TELL_PATTERNS:
-        for m in re.finditer(pattern, text_lower):
+        for m in pattern.finditer(text):
             matches.append(m.group(0))
     return matches
+
 
 def structure_markers_per_100w(text: str) -> float:
     if not text:
         return 0.0
-    text_lower = text.lower()
-    count = 0
-    for pattern in STRUCTURE_MARKERS:
-        count += len(re.findall(pattern, text_lower, flags=re.MULTILINE))
     tokens = tokenize(text)
     if not tokens:
         return 0.0
-    return count / (len(tokens) / 100)
+    count = sum(len(pattern.findall(text)) for pattern in STRUCTURE_MARKERS)
+    return count / (len(tokens) / 100.0)
+
+
+def extract_structure_quotes(text: str) -> List[str]:
+    if not text:
+        return []
+    found: List[str] = []
+    for pattern in STRUCTURE_MARKERS:
+        for m in pattern.finditer(text):
+            val = m.group(0).strip()
+            if val and val not in found:
+                found.append(val)
+    return found[:3]
+
 
 def question_mirror_score(question: str, answer: str) -> float:
     if not (question and answer):
@@ -166,36 +190,37 @@ def question_mirror_score(question: str, answer: str) -> float:
         return 0.0
     q_3 = set(zip(q_tokens, q_tokens[1:], q_tokens[2:]))
     a_3 = set(zip(a_tokens, a_tokens[1:], a_tokens[2:]))
-    if not q_3:
-        return 0.0
-    return len(q_3 & a_3) / len(q_3)
+    return (len(q_3 & a_3) / len(q_3)) if q_3 else 0.0
+
 
 def sentence_length_stats(text: str) -> Dict[str, float]:
-    sentences = [s.strip() for s in re.split(r"[.!?]+\s*", text) if s.strip()]
+    sentences = [s.strip() for s in re.split(r"[.!?]+\s*", text or "") if s.strip()]
     if not sentences:
         return {"mean": 0.0, "stdev": 0.0, "count": 0}
     lengths = [len(s.split()) for s in sentences]
     return {
-        "mean": float(statistics.mean(lengths)),
-        "stdev": float(statistics.stdev(lengths)) if len(lengths) > 1 else 0.0,
+        "mean": round(float(statistics.mean(lengths)), 2),
+        "stdev": round(float(statistics.stdev(lengths)), 2) if len(lengths) > 1 else 0.0,
         "count": len(sentences),
     }
+
 
 def compute_answer_features(question: str, answer: str) -> Dict[str, Any]:
     tells = ai_tell_matches(answer)
     return {
         "word_count": len(tokenize(answer)),
-        "disfluency_rate": disfluency_rate(answer),
-        "self_reference_rate": self_reference_rate(answer),
-        "concreteness_per_100w": concreteness_per_100w(answer),
+        "disfluency_rate": round(disfluency_rate(answer), 4),
+        "self_reference_rate": round(self_reference_rate(answer), 4),
+        "concreteness_per_100w": round(concreteness_per_100w(answer), 2),
         "ai_tell_count": len(tells),
         "ai_tells_matched": tells[:5],
-        "structure_marker_per_100w": structure_markers_per_100w(answer),
-        "mirror_score": question_mirror_score(question, answer),
+        "structure_marker_per_100w": round(structure_markers_per_100w(answer), 2),
+        "mirror_score": round(question_mirror_score(question, answer), 3),
         "sentence_stats": sentence_length_stats(answer),
     }
 
-def compute_baseline(intro_qa_pairs: List[Dict]) -> Dict[str, Any]:
+
+def compute_baseline(intro_qa_pairs: List[Dict[str, Any]]) -> Dict[str, Any]:
     if not intro_qa_pairs:
         return {}
     combined = " ".join(qa.get("answer", "") for qa in intro_qa_pairs if qa.get("answer"))
@@ -203,349 +228,527 @@ def compute_baseline(intro_qa_pairs: List[Dict]) -> Dict[str, Any]:
         return {}
     return {
         "based_on_word_count": len(tokenize(combined)),
-        "disfluency_rate": disfluency_rate(combined),
-        "self_reference_rate": self_reference_rate(combined),
-        "concreteness_per_100w": concreteness_per_100w(combined),
-        "structure_marker_per_100w": structure_markers_per_100w(combined),
+        "disfluency_rate": round(disfluency_rate(combined), 4),
+        "self_reference_rate": round(self_reference_rate(combined), 4),
+        "concreteness_per_100w": round(concreteness_per_100w(combined), 2),
+        "structure_marker_per_100w": round(structure_markers_per_100w(combined), 2),
         "sentence_stats": sentence_length_stats(combined),
     }
 
+
+# Retained for schema backward compatibility with external callers/tests
 class JudgeFinding(BaseModel):
     name: str = Field(default="finding")
     evidence_quote: str = Field(description="Verbatim excerpt from the candidate's answer")
     explanation: str = Field(description="Why this excerpt is suspicious")
 
+
 class JudgeAnswerScore(BaseModel):
     question_index: int = Field(description="0-based index into the Q&A list")
     score: float = Field(ge=0.0, le=1.0, description="0=no concern, 1=strong concern")
     risk_band: Literal["low", "medium", "high"]
-    ai_reliance_percent: Optional[float] = Field(default=None, description="Estimated AI reliance percentage 0 to 100")
-    speech_naturalness_score: Optional[float] = Field(default=None, description="Speech naturalness rating 0 to 100")
+    ai_reliance_percent: Optional[float] = Field(default=None)
+    speech_naturalness_score: Optional[float] = Field(default=None)
     findings: List[JudgeFinding] = Field(default_factory=list)
+
 
 class JudgeSessionReport(BaseModel):
     overall_score: float = Field(ge=0.0, le=1.0)
     risk_band: Literal["low", "medium", "high"]
-    ai_reliance_percent: Optional[float] = Field(default=None, description="Overall estimated AI reliance percentage")
-    overall_risk_score: Optional[float] = Field(default=None, description="Overall session risk index 0 to 100")
+    ai_reliance_percent: Optional[float] = Field(default=None)
+    overall_risk_score: Optional[float] = Field(default=None)
     pattern_findings: List[str] = Field(default_factory=list)
     recommendation: str
     per_answer: List[JudgeAnswerScore]
 
-class ProctoringService:
-    def __init__(self) -> None:
-        self._llm = None
-        self._llm_provider = None
-        self._llm_init_attempted = False
 
-    def _ensure_llm(self) -> None:
-        if self._llm_init_attempted:
-            return
-        self._llm_init_attempted = True
-        sarvam_key = os.getenv("SARVAM_API_KEY")
-        if not sarvam_key:
-            logger.warning("SARVAM_API_KEY not found; heuristic-only reports")
-            return
-        try:
-            from langchain_openai import ChatOpenAI
-            self._llm = ChatOpenAI(
-                model="sarvam-105b",
-                api_key=sarvam_key,
-                base_url="https://api.sarvam.ai/v1",
-                temperature=0.3,
-                max_tokens=4096,
-            )
-            self._llm_provider = "sarvam"
-            logger.info("ProctoringService initialised with Sarvam LLM judge")
-        except Exception as e:
-            logger.warning("Sarvam LLM init raised; heuristic-only reports", exc_info=True)
+@dataclass(frozen=True)
+class _BridgedVisionEvent:
+    """Normalizes VisionProctoringService events into the shape heuristics.py scores."""
+    anomaly_type: str
+    confidence: float
+    duration_ms: int
+    category: str
+    signal: str
+    timestamp_offset: str
+
+
+class ProctoringService:
+    """
+    OCULUS Multimodal Forensic Proctoring Orchestrator:
+      - Stage 0: Calibrates candidate Q0 baseline (Empirical Bayes MAD via heuristics.py)
+      - Stage 1: Runs 0ms deterministic heuristics + temporally aligned vision events on every turn
+      - Stage 2: Escalates ONLY gated anomalous turns (budget-capped, bounded concurrency)
+                 through FallbackLLMRouter (Groq -> Gemini Flash + zero-trust quote verification)
+      - Fusion:  Anti-dilution Top-K substantive aggregation + hard multimodal vision fusion
+    """
+
+    def __init__(self, llm_router: Optional[FallbackLLMRouter] = None) -> None:
+        self._llm_router: Optional[FallbackLLMRouter] = llm_router
+        self.max_llm_turns_per_session: int = int(
+            getattr(settings, "PROCTORING_MAX_LLM_TURNS", DEFAULT_MAX_LLM_TURNS_PER_SESSION)
+        )
+        self.llm_concurrency: int = int(
+            getattr(settings, "PROCTORING_LLM_CONCURRENCY", DEFAULT_LLM_MAX_CONCURRENCY)
+        )
+
+    def _get_llm_router(self) -> FallbackLLMRouter:
+        if self._llm_router is None:
+            self._llm_router = FallbackLLMRouter()
+        return self._llm_router
+
+    async def aclose(self) -> None:
+        if self._llm_router is not None:
+            await self._llm_router.aclose()
 
     async def score_session(self, transcript: dict, job_title: str) -> ProctoringReport:
-        start = time.time()
-        qa_pairs = transcript.get("qa_pairs", []) or []
-
+        start = time.perf_counter()
+        qa_pairs: List[Dict[str, Any]] = (transcript or {}).get("qa_pairs") or []
         if not qa_pairs:
-            return self._empty_report("no_qa_pairs", elapsed_ms=0)
+            return self._empty_report("No Q&A turns present in transcript.", elapsed_ms=0)
 
-        self._ensure_llm()
+        session_id = self._resolve_session_id(transcript, qa_pairs)
+        vision_svc = get_vision_service()
+        vision_summary = vision_svc.get_session_summary(session_id, allow_demo_mock=False)
+        vision_events_raw = vision_summary.get("anomaly_events", [])
 
-        features = [
-            compute_answer_features(qa.get("question", ""), qa.get("answer", ""))
-            for qa in qa_pairs
-        ]
+        # Stage 0: Identify Q0 introduction turn(s) and build calibrated baseline
+        intro_indices, intro_pairs = self._select_intro_pairs(qa_pairs)
+        baseline_summary = compute_baseline(intro_pairs)
+        candidate_baseline = self._build_candidate_baseline(session_id, intro_pairs)
+        baseline_summary.update({
+            "baseline_wpm": candidate_baseline.baseline_wpm,
+            "mad_wpm": candidate_baseline.mad_wpm,
+            "baseline_disfluency_rate_per_100w": candidate_baseline.baseline_disfluency_rate,
+            "baseline_ttfs_ms": candidate_baseline.baseline_ttfs_ms,
+        })
 
-        intro_pairs = [qa for qa in qa_pairs if qa.get("category") == "introduction"]
-        if not intro_pairs:
-            intro_pairs = [qa_pairs[0]]
-        baseline = compute_baseline(intro_pairs)
+        # Stage 1: Deterministic 0ms forensics + temporal vision correlation on ALL turns
+        legacy_features: List[Dict[str, Any]] = []
+        stage1_scores: List[HeuristicScores] = []
+        turn_vision_links: List[List[_BridgedVisionEvent]] = []
+        turn_injection_hits: List[List[str]] = []
 
-        judge_report: JudgeSessionReport | None = None
-        status: Literal["ok", "degraded", "failed"] = "ok"
+        for idx, qa in enumerate(qa_pairs):
+            question = str(qa.get("question") or "")
+            answer = str(qa.get("answer") or "")
 
-        if self._llm is None:
-            status = "degraded"
-        else:
-            try:
-                judge_report = await self._call_judge(qa_pairs, features, baseline, job_title)
-            except Exception as e:
-                logger.warning("Judge call failed; degrading to heuristics", exc_info=True)
-                status = "degraded"
+            feats = compute_answer_features(question, answer)
+            timing = self._extract_turn_timing(qa, feats["word_count"])
+            bridged_vision = self._fetch_aligned_vision_events(vision_svc, session_id, timing)
+            injection_hits = ForensicReasoningToolkit.detect_injection_attempts(answer)
 
-        report = self._aggregate(
+            h_score = compute_deterministic_heuristics(
+                answer_text=answer,
+                duration_ms=timing["duration_ms"],
+                baseline=candidate_baseline,
+                inter_word_gaps=timing["inter_word_gaps"],
+                ttfs_latency_ms=timing["ttfs_ms"],
+                concurrent_vision_events=bridged_vision,
+                question_text=question,
+            )
+
+            # Enrich feature dict cleanly for UI explainability
+            feats.update({
+                "question_hash": question_hash(question),
+                "wpm": h_score.wpm,
+                "wpm_robust_zscore": h_score.wpm_robust_zscore,
+                "disfluency_drop_per_100w": h_score.disfluency_drop,
+                "cadence_uniformity_cv": h_score.cadence_uniformity_cv,
+                "ttfs_latency_ms": h_score.ttfs_latency_ms,
+                "concurrent_vision_flags": h_score.concurrent_vision_flags,
+                "deterministic_risk": h_score.deterministic_risk,
+                "stage1_trigger_reasons": list(h_score.trigger_reasons),
+                "timing_estimated": timing["estimated"],
+                "security_injection_detected": bool(injection_hits),
+            })
+
+            legacy_features.append(feats)
+            stage1_scores.append(h_score)
+            turn_vision_links.append(bridged_vision)
+            turn_injection_hits.append(injection_hits)
+
+        # Stage 2: Select gated anomalous turns within per-session cost budget
+        triggered_indices = self._select_stage2_candidates(
             qa_pairs=qa_pairs,
-            features=features,
-            baseline=baseline,
-            judge=judge_report,
+            stage1_scores=stage1_scores,
+            intro_indices=intro_indices,
+            turn_injection_hits=turn_injection_hits,
+            turn_vision_links=turn_vision_links,
+        )
+
+        llm_verdicts, llm_failures = await self._evaluate_stage2_batch(
+            indices=triggered_indices,
+            qa_pairs=qa_pairs,
+            stage1_scores=stage1_scores,
+            baseline=candidate_baseline,
+            job_title=job_title,
+        )
+
+        # Status is "degraded" ONLY if a triggered Stage 2 evaluation failed to return a verdict.
+        # Clean interviews that legitimately bypass Stage 2 stay "ok".
+        status: Literal["ok", "degraded", "failed"] = "degraded" if llm_failures > 0 else "ok"
+
+        return self._aggregate(
+            qa_pairs=qa_pairs,
+            legacy_features=legacy_features,
+            stage1_scores=stage1_scores,
+            llm_verdicts=llm_verdicts,
+            turn_vision_links=turn_vision_links,
+            turn_injection_hits=turn_injection_hits,
+            intro_indices=intro_indices,
+            baseline_summary=baseline_summary,
+            candidate_baseline=candidate_baseline,
+            vision_summary=vision_summary,
+            vision_events_raw=vision_events_raw,
             status=status,
-            elapsed_ms=int((time.time() - start) * 1000),
+            elapsed_ms=int((time.perf_counter() - start) * 1000),
         )
-        return report
 
-    async def _call_judge(
+    # -----------------------------------------------------------------------
+    # Stage 0 & Stage 1 Preparation Helpers
+    # -----------------------------------------------------------------------
+    @staticmethod
+    def _resolve_session_id(transcript: dict, qa_pairs: List[Dict[str, Any]]) -> str:
+        for candidate in (
+            transcript.get("session_id"),
+            qa_pairs[0].get("session_id") if qa_pairs else None,
+        ):
+            if candidate and str(candidate).strip():
+                return str(candidate).strip()
+        return "unassigned_session"
+
+    @staticmethod
+    def _select_intro_pairs(qa_pairs: List[Dict[str, Any]]) -> Tuple[set[int], List[Dict[str, Any]]]:
+        explicit = [
+            (i, qa)
+            for i, qa in enumerate(qa_pairs)
+            if str(qa.get("category") or "").strip().lower() in ("introduction", "intro", "q0")
+        ]
+        if explicit:
+            return ({i for i, _ in explicit}, [qa for _, qa in explicit])
+
+        # Avoid calibrating on a 3-word mic check ("Yes I can hear you"); pick first substantive intro
+        for i in range(min(2, len(qa_pairs))):
+            if len(tokenize(str(qa_pairs[i].get("answer") or ""))) >= MIN_WORDS_FOR_SUBSTANTIVE_AGG:
+                return ({i}, [qa_pairs[i]])
+
+        return ({0}, [qa_pairs[0]])
+
+    def _build_candidate_baseline(
         self,
-        qa_pairs: List[Dict],
-        features: List[Dict],
-        baseline: Dict,
-        job_title: str,
-    ) -> JudgeSessionReport:
-        if len(qa_pairs) > TOKEN_BUDGET_QA_LIMIT:
-            qa_pairs = qa_pairs[:TOKEN_BUDGET_QA_LIMIT]
-            features = features[:TOKEN_BUDGET_QA_LIMIT]
+        session_id: str,
+        intro_pairs: List[Dict[str, Any]],
+    ) -> CandidateBaseline:
+        combined_text = " ".join(str(qa.get("answer") or "").strip() for qa in intro_pairs).strip()
+        word_count = len(tokenize(combined_text))
 
-        prompt = self._build_judge_prompt(qa_pairs, features, baseline, job_title)
-        
-        try:
-            raw_res = await self._llm.ainvoke(prompt)
-            content = raw_res.content if hasattr(raw_res, "content") else str(raw_res)
-            
-            cleaned = content.strip()
-            if "```" in cleaned:
-                start = cleaned.find("{")
-                end = cleaned.rfind("}")
-                if start != -1 and end != -1:
-                    cleaned = cleaned[start:end + 1]
-            
+        total_dur_ms = 0
+        all_words: List[Dict[str, Any]] = []
+        ttfs_samples: List[float] = []
+
+        for qa in intro_pairs:
+            t = self._extract_turn_timing(qa, len(tokenize(str(qa.get("answer") or ""))))
+            total_dur_ms += t["duration_ms"]
+            if isinstance(qa.get("words"), list):
+                all_words.extend(qa["words"])
+            if t["ttfs_ms"] > 0:
+                ttfs_samples.append(float(t["ttfs_ms"]))
+
+        if total_dur_ms <= 0:
+            total_dur_ms = max(2_000, int((word_count / ESTIMATED_WPM_FALLBACK) * 60_000))
+
+        avg_ttfs = statistics.fmean(ttfs_samples) if ttfs_samples else 1200.0
+        return compute_candidate_baseline(
+            session_id=session_id,
+            q0_text=combined_text,
+            duration_ms=total_dur_ms,
+            words=all_words or None,
+            ttfs_ms=avg_ttfs,
+        )
+
+    @staticmethod
+    def _extract_turn_timing(qa: Dict[str, Any], word_count: int) -> Dict[str, Any]:
+        timing_obj = qa.get("timing") if isinstance(qa.get("timing"), dict) else {}
+
+        start_ms = qa.get("start_ms", timing_obj.get("start_ms"))
+        end_ms = qa.get("end_ms", timing_obj.get("end_ms"))
+        duration_ms = qa.get("duration_ms", timing_obj.get("duration_ms"))
+        ttfs_ms = (
+            qa.get("ttfs_latency_ms")
+            or qa.get("pre_answer_silence_ms")
+            or timing_obj.get("ttfs_latency_ms")
+            or timing_obj.get("pre_answer_silence_ms")
+            or 0
+        )
+
+        estimated = False
+        if duration_ms is None and start_ms is not None and end_ms is not None:
             try:
-                json_obj = json.loads(cleaned)
-            except Exception:
-                cleaned_fixed = re.sub(r'(?<=: ")(.*?)(?=",\n|"\n|\"\})', lambda m: m.group(1).replace('\n', ' '), cleaned, flags=re.DOTALL)
-                try:
-                    json_obj = json.loads(cleaned_fixed)
-                except Exception:
-                    end_pos = cleaned.rfind("}")
-                    if end_pos != -1:
-                        json_obj = json.loads(cleaned[:end_pos + 1])
-                    else:
-                        raise
+                duration_ms = max(500, int(end_ms) - int(start_ms))
+            except (TypeError, ValueError):
+                duration_ms = None
 
-            return JudgeSessionReport.model_validate(json_obj)
-        except Exception as e:
-            logger.error(f"Sarvam 105B judge parsing error: {e}")
-            raise
+        if duration_ms is None or int(duration_ms) <= 0:
+            # Estimate at neutral prior WPM so missing timestamps never trigger false WPM Z-scores
+            duration_ms = max(2_000, int((max(word_count, 1) / ESTIMATED_WPM_FALLBACK) * 60_000))
+            estimated = True
+        else:
+            duration_ms = int(duration_ms)
 
-    def _build_judge_prompt(
+        inter_word_gaps = qa.get("inter_word_gaps")
+        if not inter_word_gaps and isinstance(qa.get("words"), list) and len(qa["words"]) >= 2:
+            gaps: List[int] = []
+            words = qa["words"]
+            for i in range(1, len(words)):
+                prev_end = words[i - 1].get("end_ms") if isinstance(words[i - 1], dict) else getattr(words[i - 1], "end_ms", None)
+                curr_start = words[i].get("start_ms") if isinstance(words[i], dict) else getattr(words[i], "start_ms", None)
+                if prev_end is not None and curr_start is not None:
+                    gap = int(curr_start) - int(prev_end)
+                    if gap >= 0:
+                        gaps.append(gap)
+            inter_word_gaps = gaps or None
+
+        return {
+            "start_ms": int(start_ms) if start_ms is not None else None,
+            "end_ms": int(end_ms) if end_ms is not None else None,
+            "duration_ms": duration_ms,
+            "ttfs_ms": max(0, int(ttfs_ms or 0)),
+            "inter_word_gaps": inter_word_gaps,
+            "estimated": estimated,
+        }
+
+    @staticmethod
+    def _fetch_aligned_vision_events(
+        vision_svc: Any,
+        session_id: str,
+        timing: Dict[str, Any],
+    ) -> List[_BridgedVisionEvent]:
+        start_ms = timing.get("start_ms")
+        end_ms = timing.get("end_ms")
+        if start_ms is None or end_ms is None or end_ms <= start_ms:
+            return []
+
+        # Include a 2-second pre-answer buffer to capture question-reading / phone-typing glances
+        raw_events = vision_svc.get_events_in_window(session_id, max(0, start_ms - 2_000), end_ms)
+        bridged: List[_BridgedVisionEvent] = []
+        for ev in raw_events:
+            cat = str(getattr(ev, "category", ""))
+            mapped_type = VISION_CATEGORY_TO_HEURISTIC_TYPE.get(cat, "GAZE_DEVIATION")
+            bridged.append(
+                _BridgedVisionEvent(
+                    anomaly_type=mapped_type,
+                    confidence=float(getattr(ev, "confidence", 0.8) or 0.8),
+                    duration_ms=int(getattr(ev, "duration_ms", 3_000) or 3_000),
+                    category=cat,
+                    signal=str(getattr(ev, "signal", "")),
+                    timestamp_offset=str(getattr(ev, "timestamp_offset", "00:00:00")),
+                )
+            )
+        return bridged
+
+    # -----------------------------------------------------------------------
+    # Stage 2 Gated & Budget-Capped Concurrent LLM Evaluation
+    # -----------------------------------------------------------------------
+    def _select_stage2_candidates(
         self,
-        qa_pairs: List[Dict],
-        features: List[Dict],
-        baseline: Dict,
+        qa_pairs: List[Dict[str, Any]],
+        stage1_scores: List[HeuristicScores],
+        intro_indices: set[int],
+        turn_injection_hits: List[List[str]],
+        turn_vision_links: List[List[_BridgedVisionEvent]],
+    ) -> List[int]:
+        candidates: List[Tuple[float, int]] = []
+        for idx, h in enumerate(stage1_scores):
+            has_injection = bool(turn_injection_hits[idx])
+            has_hard_vision = any(
+                ev.anomaly_type in ("DEVICE_DETECTED", "MULTI_FACE") for ev in turn_vision_links[idx]
+            )
+            # Do not burn LLM quota on Q0 intro unless tampered or confirmed secondary device
+            if idx in intro_indices and not (has_injection or has_hard_vision):
+                continue
+            if h.trigger_llm_judge or has_injection or (has_hard_vision and h.word_count >= MIN_WORDS_FOR_SCORING):
+                priority = h.deterministic_risk + (50.0 if has_injection else 0.0) + (25.0 if has_hard_vision else 0.0)
+                candidates.append((priority, idx))
+
+        # Prioritize highest-risk turns up to per-session budget cap
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        selected = [idx for _, idx in candidates[: self.max_llm_turns_per_session]]
+        selected.sort()
+        return selected
+
+    async def _evaluate_stage2_batch(
+        self,
+        indices: List[int],
+        qa_pairs: List[Dict[str, Any]],
+        stage1_scores: List[HeuristicScores],
+        baseline: CandidateBaseline,
         job_title: str,
-    ) -> str:
-        baseline_block = ""
-        if baseline:
-            baseline_block = (
-                "\nCANDIDATE NATURAL BASELINE (from their introduction speech):\n"
-                f"- Computed from {baseline.get('based_on_word_count', 0)} words\n"
-                f"- Disfluency rate: {baseline.get('disfluency_rate', 0):.3f}\n"
-                f"- Self-reference rate: {baseline.get('self_reference_rate', 0):.3f}\n"
-                "EVALUATE SUBSEQUENT ANSWERS AS DELTAS FROM THIS BASELINE.\n\n"
-            )
+    ) -> Tuple[Dict[int, LLMJudgeVerdict], int]:
+        if not indices:
+            return ({}, 0)
 
-        body_parts = []
-        for i, (qa, f) in enumerate(zip(qa_pairs, features)):
-            tells = ", ".join(f.get("ai_tells_matched", [])) or "none"
-            block = (
-                f"\n--- Answer {i + 1} ---\n"
-                f"Question: {qa.get('question', '')}\n"
-                f"Answer: {qa.get('answer', '')}\n"
-                f"Features: words={f.get('word_count', 0)}, "
-                f"disfluency={f.get('disfluency_rate', 0.0):.3f}, "
-                f"self_ref={f.get('self_reference_rate', 0.0):.3f}, "
-                f"ai_tells={f.get('ai_tell_count', 0)} ({tells})"
-            )
-            body_parts.append(block)
+        router = self._get_llm_router()
+        sem = asyncio.Semaphore(max(1, self.llm_concurrency))
+        verdicts: Dict[int, LLMJudgeVerdict] = {}
+        failures = 0
 
-        return (
-            "You are an authenticity reviewer for AI-assisted job interviews. Your job is to "
-            "flag ANSWERS where the candidate may have used an AI tool (like ChatGPT) to "
-            "generate the response, so a human reviewer can investigate.\n\n"
-            f"Position being interviewed for: {job_title}\n"
-            f"{baseline_block}"
-            "INTERVIEW TRANSCRIPT:\n"
-            f"{''.join(body_parts)}\n\n"
-            "WHAT TO LOOK FOR:\n"
-            "1. Generic AI structure: balanced enumerated lists, formulaic transitions.\n"
-            "2. Mode switching: sudden shifts in vocabulary, tone, or formality.\n"
-            "3. Suspicious concreteness gaps: confident claims with no names/dates.\n"
-            "4. AI tells: 'delve into', 'it's important to note', 'landscape of'.\n\n"
-            "RULES FOR OUTPUT:\n"
-            "- Include overall_score (0-1), risk_band ('low'|'medium'|'high'), ai_reliance_percent (0-100), overall_risk_score (0-100).\n"
-            "- Be concise. Keep evidence_quote under 8 words and explanation under 15 words.\n"
-            "- Return ONLY valid JSON matching this schema:\n"
-            "{\n"
-            '  "overall_score": 0.85,\n'
-            '  "overall_risk_score": 85.0,\n'
-            '  "ai_reliance_percent": 78.0,\n'
-            '  "risk_band": "high",\n'
-            '  "pattern_findings": ["Short pattern finding 1"],\n'
-            '  "recommendation": "Short recommendation",\n'
-            '  "per_answer": [\n'
-            '    {\n'
-            '      "question_index": 0,\n'
-            '      "score": 0.85,\n'
-            '      "risk_band": "high",\n'
-            '      "ai_reliance_percent": 80.0,\n'
-            '      "speech_naturalness_score": 35.0,\n'
-            '      "findings": [{"name": "ai_tell", "evidence_quote": "short quote", "explanation": "short explanation"}]\n'
-            '    }\n'
-            '  ]\n'
-            "}"
-        )
+        async def _eval_one(idx: int) -> Tuple[int, Optional[LLMJudgeVerdict]]:
+            qa = qa_pairs[idx]
+            async with sem:
+                try:
+                    verdict = await router.evaluate_turn(
+                        question_text=str(qa.get("question") or ""),
+                        answer_text=str(qa.get("answer") or ""),
+                        job_title=job_title,
+                        baseline=baseline,
+                        heuristics=stage1_scores[idx],
+                    )
+                    return (idx, verdict)
+                except Exception as exc:
+                    logger.warning("Stage 2 router error on turn %d: %s", idx, exc)
+                    return (idx, None)
 
+        results = await asyncio.gather(*(_eval_one(i) for i in indices))
+        for idx, verdict in results:
+            if verdict is not None:
+                verdicts[idx] = verdict
+            else:
+                failures += 1
+
+        return (verdicts, failures)
+
+    # -----------------------------------------------------------------------
+    # Multimodal Fusion & Anti-Dilution Session Aggregation
+    # -----------------------------------------------------------------------
     def _aggregate(
         self,
-        qa_pairs: List[Dict],
-        features: List[Dict],
-        baseline: Dict,
-        judge: JudgeSessionReport | None,
+        qa_pairs: List[Dict[str, Any]],
+        legacy_features: List[Dict[str, Any]],
+        stage1_scores: List[HeuristicScores],
+        llm_verdicts: Dict[int, LLMJudgeVerdict],
+        turn_vision_links: List[List[_BridgedVisionEvent]],
+        turn_injection_hits: List[List[str]],
+        intro_indices: set[int],
+        baseline_summary: Dict[str, Any],
+        candidate_baseline: CandidateBaseline,
+        vision_summary: Dict[str, Any],
+        vision_events_raw: List[Dict[str, Any]],
         status: Literal["ok", "degraded", "failed"],
         elapsed_ms: int,
     ) -> ProctoringReport:
         per_answer: List[AnswerProctoring] = []
+        substantive_turns: List[Tuple[float, int]] = []  # (risk_0_100, word_count)
+        advisory_probes: List[str] = []
 
-        if judge is not None:
-            judge_by_idx = {j.question_index: j for j in judge.per_answer}
-            for i, (qa, f) in enumerate(zip(qa_pairs, features)):
-                j = judge_by_idx.get(i)
-                if j is None:
-                    score, band, findings = 0.0, "low", []
-                    ai_rel = 0.0
-                    nat_score = 100.0
+        for i, (qa, feats, h) in enumerate(zip(qa_pairs, legacy_features, stage1_scores)):
+            question = str(qa.get("question") or "")
+            answer = str(qa.get("answer") or "")
+            verdict = llm_verdicts.get(i)
+            vision_links = turn_vision_links[i]
+            injection_hits = turn_injection_hits[i]
+
+            if verdict is not None:
+                # Calibrated Stage 1 + Stage 2 fusion (dampens LLM weight if LLM confidence is LOW)
+                if verdict.confidence_band == ConfidenceBand.LOW:
+                    fused_risk = (0.55 * h.deterministic_risk) + (0.45 * verdict.suspicion_score)
                 else:
-                    score, band = j.score, j.risk_band
-                    ai_rel = j.ai_reliance_percent if j.ai_reliance_percent is not None else round(score * 100, 1)
-                    nat_score = j.speech_naturalness_score if j.speech_naturalness_score is not None else round(max(0.0, 100.0 - (ai_rel * 0.7)), 1)
-                    findings = [
-                        ProctoringFinding(
-                            name=ff.name or "finding",
-                            evidence_quote=ff.evidence_quote,
-                            explanation=ff.explanation,
-                        )
-                        for ff in j.findings
-                    ]
-                if f["word_count"] < MIN_WORDS_FOR_SCORING:
-                    score = min(score, 0.2)
-                    ai_rel = min(ai_rel, 20.0)
-                    band = "low"
-                per_answer.append(
-                    AnswerProctoring(
-                        question_index=i,
-                        question_preview=qa.get("question", "")[:100],
-                        score=score,
-                        risk_band=band,
-                        ai_reliance_percent=ai_rel,
-                        speech_naturalness_score=nat_score,
-                        findings=findings,
-                        heuristic_features=f,
-                    )
+                    fused_risk = (0.35 * h.deterministic_risk) + (0.65 * verdict.suspicion_score)
+                ai_rel = round(verdict.suspicion_score, 1)
+                findings = self._build_verdict_findings(verdict, vision_links, injection_hits)
+                feats["llm_provider_used"] = verdict.provider_used
+                feats["llm_confidence_band"] = verdict.confidence_band.value
+                feats["llm_assessment"] = verdict.recitation_vs_live_assessment
+                feats["advisory_follow_up_question"] = verdict.advisory_follow_up_question
+                if verdict.advisory_follow_up_question and fused_risk >= 45.0:
+                    advisory_probes.append(f"Q{i + 1} Probe: {verdict.advisory_follow_up_question}")
+            else:
+                fused_risk = h.deterministic_risk
+                ai_rel = round(h.deterministic_risk, 1)
+                findings = self._build_heuristic_findings(answer, feats, h, vision_links, injection_hits)
+                feats["llm_provider_used"] = "stage1_gated_skip" if not h.trigger_llm_judge else "stage1_degraded"
+
+            # Short-answer safeguard (unless explicit spoken prompt injection occurred)
+            if feats["word_count"] < MIN_WORDS_FOR_SCORING and not injection_hits:
+                fused_risk = min(fused_risk, 15.0)
+                ai_rel = min(ai_rel, 15.0)
+
+            fused_risk = round(max(0.0, min(100.0, fused_risk)), 1)
+            score_unit = round(fused_risk / 100.0, 3)
+            band = self._risk_band(fused_risk)
+            nat_score = self._compute_speech_naturalness(feats, h, candidate_baseline)
+
+            per_answer.append(
+                AnswerProctoring(
+                    question_index=i,
+                    question_preview=question[:100],
+                    score=score_unit,
+                    risk_band=band,
+                    ai_reliance_percent=round(max(0.0, min(100.0, ai_rel)), 1),
+                    speech_naturalness_score=nat_score,
+                    findings=findings,
+                    heuristic_features=feats,
                 )
-            overall_score = judge.overall_score
-            overall_band = judge.risk_band
-            overall_ai_reliance = judge.ai_reliance_percent if judge.ai_reliance_percent is not None else (
-                round(sum(a.ai_reliance_percent for a in per_answer) / max(len(per_answer), 1), 1)
             )
-            overall_risk = judge.overall_risk_score if judge.overall_risk_score is not None else (
-                round(min(100.0, (overall_score * 70.0) + (overall_ai_reliance * 0.3)), 1)
-            )
-            pattern_findings = list(judge.pattern_findings) if judge.pattern_findings else []
-            recommendation = judge.recommendation
-        else:
-            for i, (qa, f) in enumerate(zip(qa_pairs, features)):
-                hscore = self._heuristic_score(f)
-                if f["word_count"] < MIN_WORDS_FOR_SCORING:
-                    hscore = min(hscore, 0.2)
-                band = "high" if hscore >= 0.6 else "medium" if hscore >= 0.3 else "low"
-                ai_rel = round(hscore * 100, 1)
-                nat_score = round(max(0.0, 100.0 - (ai_rel * 0.75)), 1)
 
-                h_findings: List[ProctoringFinding] = []
-                if f.get("ai_tell_count", 0) > 0:
-                    matched_tells = f.get("ai_tells_matched", [])
-                    quote = matched_tells[0] if matched_tells else "formulaic phrase"
-                    h_findings.append(ProctoringFinding(
-                        name="ai_tell_pattern",
-                        evidence_quote=quote,
-                        explanation="Detected formulaic LLM transition phrase in candidate response."
-                    ))
-                if f.get("structure_marker_per_100w", 0.0) > 1.5:
-                    h_findings.append(ProctoringFinding(
-                        name="formulaic_enumeration",
-                        evidence_quote="Firstly / Secondly...",
-                        explanation="Structured list enumeration characteristic of AI-generated answers."
-                    ))
-                if f.get("disfluency_rate", 0.0) < 0.005 and f.get("word_count", 0) > 40:
-                    h_findings.append(ProctoringFinding(
-                        name="unnatural_cadence",
-                        evidence_quote=qa.get("answer", "")[:35] + "...",
-                        explanation="Abnormal absence of natural human speech fillers and pauses."
-                    ))
-                if f.get("mirror_score", 0.0) > 0.15:
-                    h_findings.append(ProctoringFinding(
-                        name="question_mirroring",
-                        evidence_quote=qa.get("answer", "")[:30] + "...",
-                        explanation="Candidate repeated exact phrasing from the interviewer prompt."
-                    ))
+            # Collect substantive technical/behavioral turns for anti-dilution scoring
+            if (
+                i not in intro_indices
+                and feats["word_count"] >= MIN_WORDS_FOR_SUBSTANTIVE_AGG
+            ) or injection_hits:
+                substantive_turns.append((fused_risk, feats["word_count"]))
 
-                per_answer.append(
-                    AnswerProctoring(
-                        question_index=i,
-                        question_preview=qa.get("question", "")[:100],
-                        score=hscore,
-                        risk_band=band,
-                        ai_reliance_percent=ai_rel,
-                        speech_naturalness_score=nat_score,
-                        findings=h_findings,
-                        heuristic_features=f,
-                    )
-                )
-            overall_score = sum(a.score for a in per_answer) / max(len(per_answer), 1) if per_answer else 0.0
-            overall_band = "high" if overall_score >= 0.6 else "medium" if overall_score >= 0.3 else "low"
-            overall_ai_reliance = round(sum(a.ai_reliance_percent for a in per_answer) / max(len(per_answer), 1), 1) if per_answer else 0.0
-            overall_risk = round(min(100.0, (overall_score * 65.0) + (overall_ai_reliance * 0.35)), 1)
-            pattern_findings = ["AI reliance calculated via pattern heuristic & baseline prosody delta."]
-            recommendation = "Review flagged technical answers for AI assistance." if overall_risk > 50 else "Acceptable response authenticity."
+        # Fallback if interview only contained short turns or intros
+        if not substantive_turns:
+            substantive_turns = [
+                (round(a.score * 100.0, 1), max(f["word_count"], 1))
+                for a, f in zip(per_answer, legacy_features)
+            ]
 
-        share_high_risk = sum(1 for a in per_answer if a.risk_band == "high") / max(len(per_answer), 1)
-        avg_nat_score = round(sum(a.speech_naturalness_score for a in per_answer) / max(len(per_answer), 1), 1) if per_answer else 100.0
+        # Anti-Dilution Aggregation: blends length-weighted average with top-2 highest-risk turns
+        total_weight = sum(min(wc, 250) for _, wc in substantive_turns)
+        weighted_mean = (
+            sum(risk * min(wc, 250) for risk, wc in substantive_turns) / max(total_weight, 1)
+        )
+        top_risks = sorted((risk for risk, _ in substantive_turns), reverse=True)[:2]
+        top_k_mean = statistics.fmean(top_risks)
+        text_session_risk = (0.45 * weighted_mean) + (0.55 * top_k_mean)
 
-        # Calculate micro risk factors breakdown
-        total_tells = sum(f.get("ai_tell_count", 0) for f in features)
-        tell_score = min(100.0, round((total_tells / max(len(features), 1)) * 35.0, 1))
-        mirror_score = min(100.0, round(sum(f.get("mirror_score", 0.0) for f in features) / max(len(features), 1) * 100.0, 1))
-        disfluency_deficit = min(100.0, round(max(0.0, (0.04 - (sum(f.get("disfluency_rate", 0.0) for f in features) / max(len(features), 1))) * 2000.0), 1))
+        # Multimodal Vision Fusion (adds bounded risk from confirmed high-severity visual telemetry)
+        vision_risk_boost, vision_risk_index = self._compute_vision_fusion_boost(vision_summary)
+        overall_risk = round(min(100.0, max(0.0, text_session_risk + vision_risk_boost)), 1)
+        overall_score = round(overall_risk / 100.0, 3)
+        overall_band = self._risk_band(overall_risk)
 
-        risk_factors_breakdown = {
-            "ai_tell_patterns": tell_score,
-            "speech_naturalness": avg_nat_score,
-            "disfluency_deficit": disfluency_deficit,
-            "question_mirroring": mirror_score
-        }
+        overall_ai_reliance = round(
+            statistics.fmean([a.ai_reliance_percent for a in per_answer]) if per_answer else 0.0,
+            1,
+        )
+        share_high_risk = round(
+            sum(1 for a in per_answer if a.risk_band == "high") / max(len(per_answer), 1),
+            3,
+        )
+        avg_nat_score = round(
+            statistics.fmean([a.speech_naturalness_score for a in per_answer]) if per_answer else 100.0,
+            1,
+        )
 
-        # Fetch vision proctoring metrics
-        from app.services.vision_proctoring import get_vision_service
-        vision_svc = get_vision_service()
-        session_id = qa_pairs[0].get("session_id", "demo_session") if qa_pairs else "demo_session"
-        vision_summary = vision_svc.get_session_summary(session_id)
-        vision_events = vision_summary.get("anomaly_events", [])
+        risk_factors_breakdown = self._build_risk_breakdown(
+            legacy_features=legacy_features,
+            stage1_scores=stage1_scores,
+            avg_nat_score=avg_nat_score,
+            vision_risk_index=vision_risk_index,
+        )
+
+        pattern_findings = self._synthesize_pattern_findings(
+            per_answer=per_answer,
+            stage1_scores=stage1_scores,
+            turn_injection_hits=turn_injection_hits,
+            vision_summary=vision_summary,
+            llm_count=len(llm_verdicts),
+            advisory_probes=advisory_probes,
+        )
+        recommendation = self._build_recommendation(overall_band, overall_risk, vision_summary, turn_injection_hits)
 
         return ProctoringReport(
             overall_score=overall_score,
@@ -556,42 +759,292 @@ class ProctoringService:
             share_high_risk=share_high_risk,
             risk_factors_breakdown=risk_factors_breakdown,
             vision_summary=vision_summary,
-            vision_events=vision_events,
+            vision_events=vision_events_raw,
             pattern_findings=pattern_findings,
             recommendation=recommendation,
             caveat=ADVISORY_CAVEAT,
             per_answer=per_answer,
-            baseline_summary=baseline,
+            baseline_summary=baseline_summary,
             model_version=PROCTORING_MODEL_VERSION,
             status=status,
             elapsed_ms=elapsed_ms,
         )
 
     @staticmethod
-    def _heuristic_score(feats: Dict) -> float:
-        score = 0.0
-        # Each AI buzzword/tell phrase contributes +0.30 (max 0.85)
-        score += min(feats.get("ai_tell_count", 0) * 0.30, 0.85)
-        # Structural markers (firstly, secondly, in addition) contribute up to 0.25
-        score += min(feats.get("structure_marker_per_100w", 0.0) / 4.0, 0.25)
-        # Question prompt mirroring contributes up to 0.25
-        score += min(feats.get("mirror_score", 0.0) * 1.2, 0.25)
-        # Complete absence of natural fillers in answers >20 words contributes +0.20
-        if feats.get("disfluency_rate", 0.0) < 0.005 and feats.get("word_count", 0) > 20:
-            score += 0.20
-        # Pre-answer silence pause (>5s formulation pause typed into ChatGPT/teleprompter)
-        pre_silence = feats.get("pre_answer_silence_ms") or feats.get("timing", {}).get("pre_answer_silence_ms")
-        if pre_silence and pre_silence > 5000:
-            score += min((pre_silence - 5000) / 10000.0, 0.20)
-        return min(score, 1.0)
+    def _build_verdict_findings(
+        verdict: LLMJudgeVerdict,
+        vision_links: List[_BridgedVisionEvent],
+        injection_hits: List[str],
+    ) -> List[ProctoringFinding]:
+        findings: List[ProctoringFinding] = []
+        quotes = verdict.verbatim_evidence_quotes
+        signals = verdict.reasoning_signals
+
+        if injection_hits:
+            findings.append(
+                ProctoringFinding(
+                    name="prompt_injection_attempt",
+                    evidence_quote=injection_hits[0][:80],
+                    explanation="Spoken transcript contained direct instructions attempting to manipulate automated scoring.",
+                )
+            )
+
+        for idx, signal in enumerate(signals[:4]):
+            quote = quotes[idx] if idx < len(quotes) else (quotes[0] if quotes else "Telemetry / structural signal")
+            findings.append(
+                ProctoringFinding(
+                    name="llm_forensic_signal",
+                    evidence_quote=quote[:120],
+                    explanation=signal[:180],
+                )
+            )
+
+        for ev in vision_links[:2]:
+            findings.append(
+                ProctoringFinding(
+                    name="concurrent_vision_anomaly",
+                    evidence_quote=f"[{ev.timestamp_offset}] {ev.category}",
+                    explanation=ev.signal[:180],
+                )
+            )
+
+        return findings
+
+    @staticmethod
+    def _build_heuristic_findings(
+        answer_text: str,
+        feats: Dict[str, Any],
+        h: HeuristicScores,
+        vision_links: List[_BridgedVisionEvent],
+        injection_hits: List[str],
+    ) -> List[ProctoringFinding]:
+        """Emits ONLY grounded findings backed by real matched substrings or telemetry—never fabricated quotes."""
+        findings: List[ProctoringFinding] = []
+
+        if injection_hits:
+            findings.append(
+                ProctoringFinding(
+                    name="prompt_injection_attempt",
+                    evidence_quote=injection_hits[0][:80],
+                    explanation="Spoken transcript contained evaluator-manipulation phrasing.",
+                )
+            )
+
+        if h.ai_tell_matches:
+            findings.append(
+                ProctoringFinding(
+                    name="ai_tell_pattern",
+                    evidence_quote=", ".join(h.ai_tell_matches[:3]),
+                    explanation=f"Matched {len(h.ai_tell_matches)} LLM prose transition artifact(s).",
+                )
+            )
+
+        if feats.get("structure_marker_per_100w", 0.0) > 1.8:
+            real_markers = extract_structure_quotes(answer_text)
+            if real_markers:
+                findings.append(
+                    ProctoringFinding(
+                        name="formulaic_enumeration",
+                        evidence_quote=" / ".join(real_markers),
+                        explanation="Dense written-style structural signposting inside spoken answer.",
+                    )
+                )
+
+        if h.disfluency_drop >= 2.2 and h.word_count >= 60:
+            findings.append(
+                ProctoringFinding(
+                    name="baseline_disfluency_drop",
+                    evidence_quote=f"Disfluency -{h.disfluency_drop:.1f}/100w vs Q0",
+                    explanation="Sharp drop in natural spoken hesitations relative to candidate's own intro baseline.",
+                )
+            )
+
+        if h.cadence_uniformity_cv < 0.45 and h.word_count >= 60:
+            findings.append(
+                ProctoringFinding(
+                    name="uniform_teleprompter_cadence",
+                    evidence_quote=f"Pause CV={h.cadence_uniformity_cv:.2f}",
+                    explanation="Abnormally uniform inter-word pause variance consistent with reading text aloud.",
+                )
+            )
+
+        for ev in vision_links[:2]:
+            findings.append(
+                ProctoringFinding(
+                    name="concurrent_vision_anomaly",
+                    evidence_quote=f"[{ev.timestamp_offset}] {ev.category}",
+                    explanation=ev.signal[:180],
+                )
+            )
+
+        return findings
+
+    @staticmethod
+    def _compute_speech_naturalness(
+        feats: Dict[str, Any],
+        h: HeuristicScores,
+        baseline: CandidateBaseline,
+    ) -> float:
+        """Measures genuine spoken naturalness from prosody & disfluency rather than inverting suspicion."""
+        nat = 100.0
+        nat -= min(h.disfluency_drop * 6.5, 25.0)
+        nat -= min(len(h.ai_tell_matches) * 7.0, 25.0)
+        if not feats.get("timing_estimated", True):
+            nat -= min(max(0.0, abs(h.wpm_robust_zscore) - 1.5) * 8.0, 20.0)
+        if h.cadence_uniformity_cv < 0.50:
+            nat -= min((0.50 - h.cadence_uniformity_cv) * 80.0, 20.0)
+        if feats.get("structure_marker_per_100w", 0.0) > 2.0:
+            nat -= 10.0
+        return round(max(0.0, min(100.0, nat)), 1)
+
+    @staticmethod
+    def _compute_vision_fusion_boost(vision_summary: Dict[str, Any]) -> Tuple[float, float]:
+        if vision_summary.get("data_status") != "OK":
+            return (0.0, 0.0)
+
+        phone_n = int(vision_summary.get("phone_events_count") or 0)
+        multi_n = int(vision_summary.get("multi_face_events_count") or 0)
+        liveness_n = int(vision_summary.get("liveness_risk_events_count") or 0)
+        teleprompter_n = int(vision_summary.get("teleprompter_scan_events_count") or 0)
+        gaze_n = int(vision_summary.get("gaze_deviation_events_count") or 0)
+
+        # Hard visual signals elevate session risk; gaze alone stays conservative
+        boost = (
+            min(phone_n * 14.0, 20.0)
+            + min(multi_n * 10.0, 15.0)
+            + min(liveness_n * 12.0, 18.0)
+            + min(teleprompter_n * 6.0, 12.0)
+            + min(max(0, gaze_n - 1) * 2.0, 6.0)
+        )
+        capped_boost = round(min(boost, 25.0), 1)
+        visual_attention = vision_summary.get("visual_attention_score")
+        vision_risk_index = round(100.0 - float(visual_attention), 1) if visual_attention is not None else 0.0
+        return (capped_boost, max(0.0, min(100.0, vision_risk_index)))
+
+    @staticmethod
+    def _build_risk_breakdown(
+        legacy_features: List[Dict[str, Any]],
+        stage1_scores: List[HeuristicScores],
+        avg_nat_score: float,
+        vision_risk_index: float,
+    ) -> Dict[str, float]:
+        n = max(len(stage1_scores), 1)
+        tell_score = min(100.0, round((sum(len(h.ai_tell_matches) for h in stage1_scores) / n) * 30.0, 1))
+        mirror_score = min(
+            100.0,
+            round((sum(f.get("mirror_score", 0.0) for f in legacy_features) / n) * 100.0, 1),
+        )
+        disfluency_deficit = min(
+            100.0,
+            round((sum(h.disfluency_drop for h in stage1_scores) / n) * 22.0, 1),
+        )
+        return {
+            "ai_tell_patterns": tell_score,
+            "speech_naturalness": avg_nat_score,
+            "disfluency_deficit": disfluency_deficit,
+            "question_mirroring": mirror_score,
+            "vision_anomaly_risk": vision_risk_index,
+        }
+
+    @staticmethod
+    def _synthesize_pattern_findings(
+        per_answer: List[AnswerProctoring],
+        stage1_scores: List[HeuristicScores],
+        turn_injection_hits: List[List[str]],
+        vision_summary: Dict[str, Any],
+        llm_count: int,
+        advisory_probes: List[str],
+    ) -> List[str]:
+        notes: List[str] = []
+
+        if any(turn_injection_hits):
+            notes.append(
+                "Security Alert: Candidate transcript contained spoken instructions attempting to override automated scoring."
+            )
+
+        high_turns = [a.question_index + 1 for a in per_answer if a.risk_band == "high"]
+        if high_turns:
+            notes.append(
+                f"Elevated behavioral anomaly signals concentrated on turn(s): {', '.join(f'Q{t}' for t in high_turns)}."
+            )
+
+        if vision_summary.get("data_status") == "OK":
+            if (vision_summary.get("phone_events_count") or 0) > 0:
+                notes.append(
+                    f"Visual telemetry recorded {vision_summary['phone_events_count']} secondary device event(s)."
+                )
+            if (vision_summary.get("multi_face_events_count") or 0) > 0:
+                notes.append(
+                    f"Visual telemetry recorded {vision_summary['multi_face_events_count']} multi-face occurrence(s)."
+                )
+            if (vision_summary.get("liveness_risk_events_count") or 0) > 0:
+                notes.append("Anti-spoof monitor flagged sustained liveness or frozen-feed anomalies.")
+            if (vision_summary.get("teleprompter_scan_events_count") or 0) > 0:
+                notes.append("Gaze saccade analyzer detected rhythmic horizontal reading patterns.")
+        else:
+            notes.append("No webcam telemetry ingested; evaluation is based solely on audio/transcript signals.")
+
+        notes.append(
+            f"Two-stage gating evaluated {len(per_answer)} turn(s) deterministically and escalated {llm_count} to LLM reasoning."
+        )
+
+        # Surface up to 2 sharpest live follow-up probes for the human interviewer
+        notes.extend(advisory_probes[:2])
+        return notes
+
+    @staticmethod
+    def _build_recommendation(
+        overall_band: Literal["low", "medium", "high"],
+        overall_risk: float,
+        vision_summary: Dict[str, Any],
+        turn_injection_hits: List[List[str]],
+    ) -> str:
+        if any(turn_injection_hits):
+            return (
+                "Escalate for human integrity review: spoken evaluator-manipulation phrasing detected; "
+                "verify candidate ownership via live whiteboard or follow-up deep-dive."
+            )
+        if overall_band == "high":
+            return (
+                f"Elevated advisory risk ({overall_risk:.0f}/100): conduct a brief live follow-up "
+                "probing specific implementation trade-offs and edge cases from flagged turns."
+            )
+        if overall_band == "medium":
+            return (
+                f"Moderate advisory signals ({overall_risk:.0f}/100): review highlighted timestamps "
+                "and confirm practical depth during the next technical round."
+            )
+        if vision_summary.get("data_status") != "OK":
+            return "Low transcript risk; note that webcam telemetry was not available for this session."
+        return "Low advisory risk: responses and visual telemetry are consistent with authentic live construction."
+
+    @staticmethod
+    def _risk_band(risk_0_100: float) -> Literal["low", "medium", "high"]:
+        if risk_0_100 >= 65.0:
+            return "high"
+        if risk_0_100 >= 35.0:
+            return "medium"
+        return "low"
 
     def _empty_report(self, reason: str, elapsed_ms: int) -> ProctoringReport:
         return ProctoringReport(
             overall_score=0.0,
+            overall_risk_score=0.0,
+            ai_reliance_percent=0.0,
+            speech_naturalness_score=100.0,
             risk_band="low",
             share_high_risk=0.0,
+            risk_factors_breakdown={
+                "ai_tell_patterns": 0.0,
+                "speech_naturalness": 100.0,
+                "disfluency_deficit": 0.0,
+                "question_mirroring": 0.0,
+                "vision_anomaly_risk": 0.0,
+            },
+            vision_summary={"data_status": "NO_TELEMETRY", "anomaly_events": []},
+            vision_events=[],
             pattern_findings=[reason],
-            recommendation="no action",
+            recommendation="No scorable candidate responses were captured.",
             caveat=ADVISORY_CAVEAT,
             per_answer=[],
             baseline_summary={},
@@ -600,7 +1053,9 @@ class ProctoringService:
             elapsed_ms=elapsed_ms,
         )
 
-_proctoring_service: ProctoringService | None = None
+
+_proctoring_service: Optional[ProctoringService] = None
+
 
 def get_proctoring_service() -> ProctoringService:
     global _proctoring_service

@@ -18,7 +18,22 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" data-theme="light">
+    <html lang="en" data-theme="light" suppressHydrationWarning>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){
+              try {
+                var t = localStorage.getItem("oculus_theme") || localStorage.getItem("verimeet_theme") || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+                document.documentElement.setAttribute("data-theme", t);
+                if (t === "dark" || t === "obsidian" || t === "ocean") {
+                  document.documentElement.classList.add("dark");
+                }
+              } catch(e) {}
+            })()`,
+          }}
+        />
+      </head>
       <body className="min-h-screen flex flex-col bg-[var(--oculus-bg)] text-[var(--oculus-ink)] font-sans antialiased selection:bg-[var(--oculus-ink)] selection:text-[var(--oculus-bg)]">
         <OculusLoader oncePerSession={false} />
         <OculusNavbar />

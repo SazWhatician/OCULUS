@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { fetchSession, swapSpeakers, completeSession, WS_BASE_URL, API_BASE_URL, SessionDetail } from "@/lib/api";
+import { fetchSession, swapSpeakers, completeSession, WS_BASE_URL, SessionDetail } from "@/lib/api";
 
 interface UtteranceItem {
   utterance_id: string;
@@ -104,53 +104,38 @@ export default function LiveSentinelPage() {
       setWsConnected(true);
     };
 
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        const eventType = msg.event_type;
-        const data = msg.data;
-
-        if (eventType === "HYDRATE_STATE") {
-          if (data.status) setStatus(data.status);
-          if (data.baseline) setBaseline(data.baseline);
-          if (data.utterances) setUtterances(data.utterances);
-          if (data.report) {
-            setRiskScore(data.report.overall_risk_score || 0);
-            setRiskBand(data.report.risk_band || "LOW");
-            if (data.report.qa_evaluations) setQaEvaluations(data.report.qa_evaluations);
-            if (data.report.vision_timeline) setVisionEvents(data.report.vision_timeline);
-          }
-        } else if (eventType === "UTTERANCE") {
-          setUtterances((prev) => {
-            const exists = prev.some((u) => u.utterance_id === data.utterance_id);
-            if (exists) return prev;
-            return [...prev, data];
-          });
-        } else if (eventType === "QA_EVALUATED") {
-          if (data.overall_risk_score !== undefined) setRiskScore(data.overall_risk_score);
-          if (data.risk_band) setRiskBand(data.risk_band);
-          if (data.qa_evaluation) {
-            setQaEvaluations((prev) => [...prev, data.qa_evaluation]);
-          }
-        } else if (eventType === "VISION_ANOMALY") {
-          setVisionEvents((prev) => [data, ...prev]);
-        } else if (eventType === "STATUS_UPDATE") {
-          if (data.status) setStatus(data.status);
-          if (data.overall_risk_score !== undefined) setRiskScore(data.overall_risk_score);
-          if (data.risk_band) setRiskBand(data.risk_band);
-        }
-      } catch (err) {
-        console.error("WS message parse error:", err);
-      }
-    };
-
     ws.onclose = () => {
       setWsConnected(false);
     };
 
-    ws.onerror = (err) => {
-      console.error("WebSocket error:", err);
-      setWsConnected(false);
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        const { event_type, payload } = msg;
+
+        if (event_type === "utterance") {
+          setUtterances((prev) => [...prev, payload]);
+        } else if (event_type === "qa_evaluated") {
+          setQaEvaluations((prev) => {
+            const exists = prev.some((q) => q.qa_index === payload.qa_index);
+            if (exists) {
+              return prev.map((q) => (q.qa_index === payload.qa_index ? payload : q));
+            }
+            return [...prev, payload];
+          });
+        } else if (event_type === "risk_update") {
+          setRiskScore(payload.overall_risk_score || 0);
+          setRiskBand(payload.risk_band || "LOW");
+        } else if (event_type === "baseline_calibrated") {
+          setBaseline(payload);
+        } else if (event_type === "vision_anomaly") {
+          setVisionEvents((prev) => [...prev, payload]);
+        } else if (event_type === "status_change") {
+          setStatus(payload.status);
+        }
+      } catch (err) {
+        console.error("WS Parse Error:", err);
+      }
     };
 
     return () => {
@@ -160,13 +145,20 @@ export default function LiveSentinelPage() {
 
   // Speaker Swap Action
   const handleSwapSpeakers = async () => {
-    const newMap = {
-      S1: speakerMap["S1"] === "candidate" ? "interviewer" : "candidate",
-      S2: speakerMap["S2"] === "candidate" ? "interviewer" : "candidate",
-    };
     try {
-      await swapSpeakers(sessionId, newMap);
-      setSpeakerMap(newMap);
+      const nextMap = {
+        S1: speakerMap["S1"] === "candidate" ? "interviewer" : "candidate",
+        S2: speakerMap["S2"] === "candidate" ? "interviewer" : "candidate",
+      };
+      const res = await swapSpeakers(sessionId, nextMap);
+      const updated = res.speaker_role_map || nextMap;
+      setSpeakerMap(updated);
+      setUtterances((prev) =>
+        prev.map((u) => {
+          const newRole = updated[u.speaker_label] || u.speaker;
+          return { ...u, speaker: newRole };
+        })
+      );
     } catch (err) {
       alert("Failed to swap speaker roles.");
     }
@@ -174,7 +166,7 @@ export default function LiveSentinelPage() {
 
   // Complete Session Action
   const handleCompleteSession = async () => {
-    if (!confirm("Are you sure you want to conclude monitoring and generate the final Audit Report?")) return;
+    if (!confirm("Are you sure you want to conclude monitoring and compile the final Audit Report?")) return;
     setEndingSession(true);
     try {
       await completeSession(sessionId);
@@ -198,108 +190,121 @@ export default function LiveSentinelPage() {
     .find((q) => q.llm_verdict?.advisory_follow_up_question)
     ?.llm_verdict?.advisory_follow_up_question;
 
+  const isElevated = riskBand === "ELEVATED";
+
   return (
-    <div className="space-y-6">
+    <div className="max-w-7xl mx-auto space-y-6">
       {/* Top Command Bar */}
-      <div className="apple-card p-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <Link href="/" className="text-xs font-semibold text-[var(--apple-accent)] hover:underline">
-              ← Dashboard
-            </Link>
-            <span className="text-xs text-[var(--apple-text-muted)]">•</span>
-            <span className="apple-badge font-mono text-[10px]">Session: {sessionId}</span>
-            <span
-              className={`apple-badge text-[10px] font-bold ${
-                wsConnected ? "bg-emerald-500/10 text-emerald-600" : "bg-rose-500/10 text-rose-600"
-              }`}
+      <div className="border border-[var(--oculus-hairline)] bg-[var(--oculus-surface)] p-5 sm:p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-3">
+            <Link
+              href="/"
+              className="font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--oculus-muted)] hover:text-[var(--oculus-ink)] transition-colors inline-flex items-center gap-1.5"
             >
-              <span className={`w-1.5 h-1.5 rounded-full ${wsConnected ? "bg-emerald-500 live-pulse" : "bg-rose-500"} mr-1.5`}></span>
-              {wsConnected ? "LIVE WS CONNECTED" : "RECONNECTING"}
+              <span>←</span>
+              <span>INDEX // 01</span>
+            </Link>
+            <span className="text-[var(--oculus-hairline)]">/</span>
+            <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--oculus-muted)]">
+              SENTINEL // {sessionId.slice(0, 8)}
+            </span>
+            <span className="inline-flex items-center gap-2 border border-[var(--oculus-hairline)] px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.24em] text-[var(--oculus-ink)]">
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${
+                  wsConnected ? "bg-[#10B981] animate-pulse" : "bg-[#E12D1E]"
+                }`}
+              />
+              {wsConnected ? "FEED ACTIVE" : "RECONNECTING"}
             </span>
           </div>
 
-          <div className="flex items-center gap-3">
-            <h1 className="text-xl font-extrabold text-[var(--apple-text-primary)]">
-              {session?.candidate_name || "Candidate"}
+          <div className="flex flex-wrap items-baseline gap-3">
+            <h1 className="font-display text-2xl font-semibold tracking-[-0.02em] text-[var(--oculus-ink)]">
+              {session?.candidate_name || "Alex Johnson"}
             </h1>
-            <span className="text-xs text-[var(--apple-text-secondary)] font-medium">
-              ({session?.job_title || "Technical Role"})
+            <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-[var(--oculus-muted)]">
+              {session?.job_title || "Technical Role"}
             </span>
           </div>
         </div>
 
         {/* Action Controls */}
-        <div className="flex items-center gap-2.5 flex-wrap">
+        <div className="flex items-center gap-3 flex-wrap">
           <button
             onClick={handleSwapSpeakers}
-            className="apple-button-secondary px-3.5 py-1.5 text-xs font-bold inline-flex items-center gap-1.5"
+            className="border border-[var(--oculus-hairline)] bg-[var(--oculus-bg)] px-4 py-2.5 font-mono text-[10px] uppercase tracking-[0.2em] text-[var(--oculus-ink)] hover:border-[var(--oculus-ink)] transition-colors"
             title="Swap S1 and S2 roles if diarization detected interviewer as candidate"
           >
-            <span>⇄ Swap Roles (S1: {speakerMap["S1"]})</span>
+            ⇄ SWAP S1/S2 (S1: {speakerMap["S1"]})
           </button>
 
           {status === "COMPLETED" ? (
             <Link
               href={`/reports/${sessionId}`}
-              className="apple-button-primary px-4 py-1.5 text-xs font-bold inline-flex items-center gap-1.5"
+              className="border border-[var(--oculus-ink)] bg-[var(--oculus-ink)] px-5 py-2.5 font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--oculus-bg)] hover:bg-[var(--oculus-bg)] hover:text-[var(--oculus-ink)] transition-colors"
             >
-              <span>View Audit Report →</span>
+              VIEW AUDIT REPORT →
             </Link>
           ) : (
             <button
               onClick={handleCompleteSession}
               disabled={endingSession}
-              className="apple-button-primary px-4 py-1.5 text-xs font-bold inline-flex items-center gap-1.5 bg-rose-600 hover:bg-rose-700"
+              className="border border-[#E12D1E] bg-[#E12D1E] px-5 py-2.5 font-mono text-[10px] uppercase tracking-[0.24em] text-white hover:bg-transparent hover:text-[#E12D1E] transition-colors disabled:opacity-50"
             >
-              <span>{endingSession ? "Finalizing Report..." : "■ End Session & View Report"}</span>
+              {endingSession ? "COMPILING REPORT..." : "■ CONCLUDE & AUDIT"}
             </button>
           )}
         </div>
       </div>
 
-      {/* Main Grid: 60% Left Stream / 40% Right Proctoring Cards */}
+      {/* Main Grid: 60% Left Stream / 40% Right Proctoring Gauges */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column: Live Diarized Transcript Stream & Evidence */}
         <div className="lg:col-span-7 space-y-6">
-          {/* Transcript Card */}
-          <div className="apple-card p-6 space-y-4 flex flex-col h-[600px]">
+          {/* Transcript Feed Card */}
+          <div className="border border-[var(--oculus-hairline)] bg-[var(--oculus-surface)] p-5 sm:p-6 space-y-4 flex flex-col h-[620px]">
             {/* Header & Filter Tabs */}
-            <div className="flex items-center justify-between border-b border-[var(--apple-border)] pb-3">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-extrabold text-[var(--apple-text-primary)] uppercase tracking-wider">
-                  Live Diarized Transcript
+            <div className="flex items-center justify-between border-b border-[var(--oculus-hairline)] pb-4">
+              <div className="flex items-center gap-3">
+                <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-[var(--oculus-muted)]">
+                  SEC. 01
                 </span>
-                <span className="apple-badge text-[10px] bg-blue-500/10 text-blue-600 font-mono">
-                  {utterances.length} turns
+                <span className="font-display text-sm font-semibold tracking-[-0.01em] text-[var(--oculus-ink)]">
+                  LIVE DIARIZED TRANSCRIPTION
+                </span>
+                <span className="border border-[var(--oculus-hairline)] px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.2em] text-[var(--oculus-muted)]">
+                  {utterances.length} TURNS
                 </span>
               </div>
 
-              <div className="bg-[var(--apple-bg)] p-0.5 rounded-full border border-[var(--apple-border)] flex items-center text-[11px]">
+              <div className="inline-flex border border-[var(--oculus-hairline)] bg-[var(--oculus-bg)] text-[9.5px] font-mono uppercase tracking-[0.18em]">
                 {(["ALL", "candidate", "interviewer"] as const).map((filter) => (
                   <button
                     key={filter}
                     onClick={() => setFilterSpeaker(filter)}
-                    className={`px-3 py-1 rounded-full transition-all ${
+                    className={`px-3 py-1.5 transition-colors ${
                       filterSpeaker === filter
-                        ? "bg-[var(--apple-surface)] text-[var(--apple-text-primary)] font-bold shadow-sm"
-                        : "text-[var(--apple-text-secondary)] hover:text-[var(--apple-text-primary)]"
+                        ? "bg-[var(--oculus-ink)] text-[var(--oculus-bg)]"
+                        : "text-[var(--oculus-muted)] hover:text-[var(--oculus-ink)]"
                     }`}
                   >
-                    {filter === "ALL" ? "All" : filter.charAt(0).toUpperCase() + filter.slice(1)}
+                    {filter === "ALL" ? "ALL" : filter.toUpperCase()}
                   </button>
                 ))}
               </div>
             </div>
 
             {/* Scrollable Message Feed */}
-            <div className="flex-1 overflow-y-auto space-y-3 pr-2">
+            <div className="flex-1 overflow-y-auto space-y-3 pr-2 font-mono text-xs">
               {filteredUtterances.length === 0 ? (
-                <div className="h-full flex flex-col items-center justify-center text-center space-y-2 text-[var(--apple-text-secondary)]">
-                  <span className="text-3xl">🎙️</span>
-                  <p className="text-xs font-semibold">Awaiting first spoken utterance from meeting stream...</p>
-                  <p className="text-[11px] text-[var(--apple-text-muted)] max-w-xs">
-                    Audio chunks are routed to Speechmatics & Groq Whisper and stitched within 2500ms windows.
+                <div className="h-full flex flex-col items-center justify-center text-center space-y-2 text-[var(--oculus-muted)]">
+                  <div className="font-mono text-xl opacity-40">◫</div>
+                  <p className="font-mono text-[10.5px] uppercase tracking-[0.24em] text-[var(--oculus-ink)]">
+                    BUFFERING INCOMING MULTIMODAL MEDIA STREAM...
+                  </p>
+                  <p className="font-mono text-[9.5px] uppercase tracking-[0.16em] max-w-xs">
+                    Chunks stitched across Speechmatics diarization & Groq Whisper Turbo.
                   </p>
                 </div>
               ) : (
@@ -313,26 +318,32 @@ export default function LiveSentinelPage() {
                   return (
                     <div
                       key={u.utterance_id}
-                      className={`p-3.5 rounded-2xl text-xs space-y-1.5 transition-all ${
+                      className={`p-4 border transition-all ${
                         isCandidate
-                          ? "bg-[var(--apple-surface)] border border-[var(--apple-border)] shadow-sm ml-4"
-                          : "bg-[var(--apple-bg)] border border-transparent mr-4"
+                          ? "border-[var(--oculus-hairline)] bg-[var(--oculus-bg)] ml-4"
+                          : "border-transparent bg-transparent mr-4 opacity-80"
                       }`}
                     >
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between mb-1.5">
                         <span
-                          className={`font-bold inline-flex items-center gap-1.5 ${
-                            isCandidate ? "text-[var(--apple-accent)]" : "text-[var(--apple-text-secondary)]"
+                          className={`font-mono text-[9.5px] uppercase tracking-[0.2em] font-semibold flex items-center gap-2 ${
+                            isCandidate ? "text-[var(--oculus-ink)]" : "text-[var(--oculus-muted)]"
                           }`}
                         >
                           <span
-                            className={`w-1.5 h-1.5 rounded-full ${isCandidate ? "bg-[var(--apple-accent)]" : "bg-slate-400"}`}
-                          ></span>
-                          {isCandidate ? session?.candidate_name || "Candidate" : "Interviewer"} ({u.speaker_label})
+                            className={`h-1.5 w-1.5 rounded-full ${
+                              isCandidate ? "bg-[var(--oculus-ink)]" : "bg-[var(--oculus-muted)]"
+                            }`}
+                          />
+                          {isCandidate ? session?.candidate_name || "CANDIDATE" : "INTERVIEWER"} ({u.speaker_label})
                         </span>
-                        <span className="text-[10px] text-[var(--apple-text-muted)] font-mono">{timeFormatted}</span>
+                        <span className="font-mono text-[9px] text-[var(--oculus-muted)] tabular-nums">
+                          {timeFormatted}
+                        </span>
                       </div>
-                      <p className="text-[var(--apple-text-primary)] leading-relaxed text-[13px]">{u.text}</p>
+                      <p className="text-[var(--oculus-ink)] text-[12px] leading-relaxed uppercase tracking-[0.04em]">
+                        {u.text}
+                      </p>
                     </div>
                   );
                 })
@@ -341,93 +352,95 @@ export default function LiveSentinelPage() {
             </div>
           </div>
 
-          {/* Real-Time Advisory Follow-up Question Card */}
+          {/* Real-Time Recruiter Probe Advisory Card */}
           {latestAdvisoryQuestion && (
-            <div className="apple-card p-5 space-y-2 border-l-4 border-l-[var(--apple-accent)] bg-[var(--apple-accent-light)]">
+            <div className="border border-[var(--oculus-hairline)] bg-[var(--oculus-surface)] p-5 space-y-2 font-mono">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-extrabold text-[var(--apple-accent)] uppercase tracking-wider flex items-center gap-1.5">
-                  <span>💡</span> Live Recruiter Probe (LLM Judge Suggestion)
+                <span className="text-[10px] font-bold uppercase tracking-[0.24em] text-[#E12D1E] flex items-center gap-2">
+                  <span className="h-1.5 w-1.5 rounded-full bg-[#E12D1E] animate-pulse" />
+                  ADVISORY VERIFICATION PROBE (STAGE 2 LLM JUDGE)
                 </span>
-                <span className="apple-badge text-[10px] font-mono">Real-time</span>
+                <span className="border border-[var(--oculus-hairline)] px-2 py-0.5 text-[9px] uppercase tracking-[0.2em] text-[var(--oculus-muted)]">
+                  LIVE TELEMETRY
+                </span>
               </div>
-              <p className="text-xs font-bold text-[var(--apple-text-primary)] leading-relaxed">
+              <p className="text-[12px] font-semibold text-[var(--oculus-ink)] leading-relaxed uppercase tracking-[0.06em]">
                 &ldquo;{latestAdvisoryQuestion}&rdquo;
               </p>
-              <p className="text-[11px] text-[var(--apple-text-secondary)]">
-                Ask this question to verify if the candidate understands architectural depth or recited an AI summary.
+              <p className="text-[9.5px] uppercase tracking-[0.16em] text-[var(--oculus-muted)]">
+                Inquire with this probe to differentiate architectural comprehension from generative teleprompter recitation.
               </p>
             </div>
           )}
 
-          {/* Q&A Evaluations Feed */}
-          <div className="apple-card p-6 space-y-4">
-            <div className="flex items-center justify-between border-b border-[var(--apple-border)] pb-3">
-              <h2 className="text-xs font-extrabold text-[var(--apple-text-primary)] uppercase tracking-wider">
-                Real-Time Q&A Evaluations ({qaEvaluations.length})
-              </h2>
-              <span className="text-[11px] text-[var(--apple-text-secondary)]">Filtered by Pre-Filter Gate</span>
+          {/* Evaluated Q&A Turns Stream */}
+          <div className="border border-[var(--oculus-hairline)] bg-[var(--oculus-surface)] p-5 sm:p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-[var(--oculus-hairline)] pb-4">
+              <div className="flex items-center gap-3">
+                <span className="font-mono text-[10px] uppercase tracking-[0.3em] text-[var(--oculus-muted)]">
+                  SEC. 02
+                </span>
+                <h2 className="font-display text-sm font-semibold tracking-[-0.01em] text-[var(--oculus-ink)]">
+                  CALIBRATED Q&A EVALUATIONS ({qaEvaluations.length})
+                </h2>
+              </div>
+              <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-[var(--oculus-muted)]">
+                STAGE 1 + 2 PIPELINE
+              </span>
             </div>
 
             {qaEvaluations.length === 0 ? (
-              <div className="p-6 text-center text-xs text-[var(--apple-text-secondary)]">
-                No complete candidate answers evaluated yet. Calibration occurs on Question 0.
+              <div className="p-8 text-center font-mono text-[10.5px] uppercase tracking-[0.2em] text-[var(--oculus-muted)]">
+                Awaiting Question 0 baseline calibration to initiate turn scoring.
               </div>
             ) : (
               <div className="space-y-4">
                 {qaEvaluations.map((qa) => {
                   const score = Math.round(qa.combined_risk_score);
-                  const isElevated = score >= 65;
-                  const isModerate = score >= 35 && score < 65;
+                  const isTurnElevated = score >= 65;
 
                   return (
                     <div
                       key={qa.qa_index}
-                      className="p-4 rounded-xl border border-[var(--apple-border)] bg-[var(--apple-bg)] space-y-3"
+                      className="border border-[var(--oculus-hairline)] bg-[var(--oculus-bg)] p-4 space-y-3 font-mono text-[11px]"
                     >
                       <div className="flex items-center justify-between">
-                        <span className="text-xs font-extrabold text-[var(--apple-text-primary)]">
-                          Question #{qa.qa_index + 1}
+                        <span className="font-bold uppercase tracking-[0.2em] text-[var(--oculus-ink)]">
+                          TURN #{String(qa.qa_index + 1).padStart(2, "0")}
                         </span>
-                        <div className="flex items-center gap-2">
-                          <span
-                            className={`text-xs font-extrabold px-2 py-0.5 rounded-full ${
-                              isElevated
-                                ? "bg-rose-500/10 text-rose-600"
-                                : isModerate
-                                ? "bg-amber-500/10 text-amber-600"
-                                : "bg-emerald-500/10 text-emerald-600"
-                            }`}
-                          >
-                            Risk: {score}%
-                          </span>
-                        </div>
+                        <span
+                          className={`font-mono text-[10px] font-bold px-2 py-0.5 border tabular-nums ${
+                            isTurnElevated
+                              ? "border-[#E12D1E] text-[#E12D1E]"
+                              : "border-[var(--oculus-hairline)] text-[var(--oculus-ink)]"
+                          }`}
+                        >
+                          RISK: {score}%
+                        </span>
                       </div>
 
-                      <div className="text-xs space-y-1">
-                        <div className="font-semibold text-[var(--apple-text-secondary)]">
-                          Q: {qa.question_text}
-                        </div>
-                        <div className="text-[var(--apple-text-primary)] line-clamp-2">
-                          A: {qa.answer_text}
-                        </div>
+                      <div className="space-y-1.5 text-[10.5px] uppercase tracking-[0.06em]">
+                        <div className="text-[var(--oculus-muted)]">Q: {qa.question_text}</div>
+                        <div className="text-[var(--oculus-ink)] line-clamp-2">A: {qa.answer_text}</div>
                       </div>
 
-                      {/* Signals Pills */}
-                      <div className="flex items-center gap-2 flex-wrap text-[10px]">
-                        <span className="apple-badge font-mono">WPM: {Math.round(qa.heuristics.wpm)}</span>
+                      <div className="flex items-center gap-2 flex-wrap text-[9px] pt-1">
+                        <span className="border border-[var(--oculus-hairline)] px-2 py-0.5 text-[var(--oculus-muted)]">
+                          WPM: {Math.round(qa.heuristics.wpm)}
+                        </span>
                         {qa.heuristics.disfluency_drop > 0 && (
-                          <span className="apple-badge font-mono text-amber-600 bg-amber-500/10">
-                            Disfluency Drop: {qa.heuristics.disfluency_drop.toFixed(1)}%
+                          <span className="border border-[#E12D1E] text-[#E12D1E] px-2 py-0.5">
+                            DISFLUENCY DROP: −{qa.heuristics.disfluency_drop.toFixed(1)}%
                           </span>
                         )}
                         {qa.heuristics.ai_tell_matches?.length > 0 && (
-                          <span className="apple-badge font-mono text-rose-600 bg-rose-500/10">
-                            AI Tells: {qa.heuristics.ai_tell_matches.join(", ")}
+                          <span className="border border-[#E12D1E] text-[#E12D1E] px-2 py-0.5">
+                            TELL: {qa.heuristics.ai_tell_matches.join(", ")}
                           </span>
                         )}
                         {qa.llm_verdict && (
-                          <span className="apple-badge font-mono text-purple-600 bg-purple-500/10">
-                            LLM Judge: {qa.llm_verdict.confidence_band} Confidence
+                          <span className="border border-[var(--oculus-hairline)] px-2 py-0.5 text-[var(--oculus-ink)]">
+                            LLM JUDGE: {qa.llm_verdict.confidence_band}
                           </span>
                         )}
                       </div>
@@ -441,151 +454,161 @@ export default function LiveSentinelPage() {
 
         {/* Right Column: Gauges, Vision Proctoring, Baseline */}
         <div className="lg:col-span-5 space-y-6">
-          {/* Dynamic Rolling Risk Gauge Card */}
-          <div className="apple-card p-6 text-center space-y-4">
-            <span className="text-xs font-bold text-[var(--apple-text-secondary)] uppercase tracking-wider block">
-              Cumulative Authenticity Risk
+          {/* Cumulative Rolling Risk Gauge */}
+          <div className="border border-[var(--oculus-hairline)] bg-[var(--oculus-surface)] p-6 text-center space-y-4">
+            <span className="font-mono text-[9.5px] uppercase tracking-[0.28em] text-[var(--oculus-muted)] block">
+              CUMULATIVE SENTINEL RISK INDEX
             </span>
 
-            <div className="relative inline-flex items-center justify-center">
-              {/* Outer Circular Ring Visual */}
+            <div className="py-4">
               <div
-                className={`w-36 h-36 rounded-full border-8 flex flex-col items-center justify-center transition-all duration-500 shadow-inner ${
-                  riskBand === "ELEVATED"
-                    ? "border-rose-500 bg-rose-500/5 text-rose-600"
-                    : riskBand === "MODERATE"
-                    ? "border-amber-500 bg-amber-500/5 text-amber-600"
-                    : "border-emerald-500 bg-emerald-500/5 text-emerald-600"
+                className={`w-36 h-36 mx-auto border-2 flex flex-col items-center justify-center transition-all duration-500 ${
+                  isElevated
+                    ? "border-[#E12D1E] text-[#E12D1E]"
+                    : "border-[var(--oculus-ink)] text-[var(--oculus-ink)]"
                 }`}
               >
-                <span className="text-4xl font-black tracking-tight">{Math.round(riskScore)}%</span>
-                <span className="text-[11px] font-extrabold uppercase tracking-widest mt-1">
+                <span className="font-display text-4xl font-semibold tracking-tight tabular-nums">
+                  {Math.round(riskScore)}%
+                </span>
+                <span className="font-mono text-[9px] font-bold uppercase tracking-[0.24em] mt-1">
                   {riskBand}
                 </span>
               </div>
             </div>
 
-            <p className="text-xs text-[var(--apple-text-secondary)] max-w-xs mx-auto">
-              {riskBand === "ELEVATED"
-                ? "Substantial reliance on off-screen AI text or prolonged gaze deviations detected."
+            <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--oculus-muted)] max-w-xs mx-auto leading-relaxed">
+              {isElevated
+                ? "ELEVATED RISK: ACCELERATED FLUENCY WITH PROLONGED OPTICAL GAZE DEFLECTION OBSERVED."
                 : riskBand === "MODERATE"
-                ? "Inconsistent disfluency or AI tell phrasing observed; check follow-up probes."
-                : "Natural conversational formulation matches candidate's Q0 baseline."}
+                ? "MODERATE VARIATION: FORMULATION INCONSISTENT WITH Q0 DISFLUENCY BASELINE."
+                : "NOMINAL INTEGRITY: NATURAL CADENCE AND RETICLE GAZE PARITY."}
             </p>
           </div>
 
           {/* Q0 Baseline Calibration Card */}
-          <div className="apple-card p-5 space-y-3">
-            <div className="flex items-center justify-between border-b border-[var(--apple-border)] pb-2.5">
-              <span className="text-xs font-extrabold text-[var(--apple-text-primary)] uppercase tracking-wider">
-                Q0 Candidate Baseline
+          <div className="border border-[var(--oculus-hairline)] bg-[var(--oculus-surface)] p-5 space-y-4">
+            <div className="flex items-center justify-between border-b border-[var(--oculus-hairline)] pb-3">
+              <span className="font-mono text-[10px] uppercase tracking-[0.26em] text-[var(--oculus-muted)] font-semibold">
+                Q0 CANDIDATE BASELINE
               </span>
-              <span className="apple-badge text-[10px] bg-emerald-500/10 text-emerald-600 font-mono">
-                {baseline ? "Calibrated" : "Calibrating..."}
+              <span className="border border-[var(--oculus-hairline)] px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.2em] text-[var(--oculus-ink)]">
+                {baseline ? "CALIBRATED" : "CALIBRATING..."}
               </span>
             </div>
 
             {baseline ? (
-              <div className="grid grid-cols-2 gap-3 text-xs">
-                <div className="p-2.5 bg-[var(--apple-bg)] rounded-xl border border-[var(--apple-border)]">
-                  <span className="text-[10px] text-[var(--apple-text-secondary)] block">Median WPM</span>
-                  <span className="text-base font-extrabold text-[var(--apple-text-primary)]">
+              <div className="grid grid-cols-2 gap-3 font-mono text-[10px]">
+                <div className="p-3 border border-[var(--oculus-hairline)] bg-[var(--oculus-bg)]">
+                  <span className="text-[var(--oculus-muted)] block uppercase tracking-[0.18em]">MEDIAN WPM</span>
+                  <span className="font-display text-xl font-semibold text-[var(--oculus-ink)] tabular-nums mt-0.5 block">
                     {Math.round(baseline.median_wpm || baseline.baseline_wpm || 135)}
                   </span>
                 </div>
-                <div className="p-2.5 bg-[var(--apple-bg)] rounded-xl border border-[var(--apple-border)]">
-                  <span className="text-[10px] text-[var(--apple-text-secondary)] block">Disfluency Rate</span>
-                  <span className="text-base font-extrabold text-[var(--apple-text-primary)]">
-                    {(baseline.baseline_disfluency_rate || 0).toFixed(1)} / 100w
+                <div className="p-3 border border-[var(--oculus-hairline)] bg-[var(--oculus-bg)]">
+                  <span className="text-[var(--oculus-muted)] block uppercase tracking-[0.18em]">DISFLUENCY</span>
+                  <span className="font-display text-xl font-semibold text-[var(--oculus-ink)] tabular-nums mt-0.5 block">
+                    {(baseline.baseline_disfluency_rate || 0).toFixed(1)}%
                   </span>
                 </div>
-                <div className="p-2.5 bg-[var(--apple-bg)] rounded-xl border border-[var(--apple-border)]">
-                  <span className="text-[10px] text-[var(--apple-text-secondary)] block">MAD Variance</span>
-                  <span className="text-base font-extrabold text-[var(--apple-text-primary)]">
+                <div className="p-3 border border-[var(--oculus-hairline)] bg-[var(--oculus-bg)]">
+                  <span className="text-[var(--oculus-muted)] block uppercase tracking-[0.18em]">MAD SIGMA</span>
+                  <span className="font-display text-xl font-semibold text-[var(--oculus-ink)] tabular-nums mt-0.5 block">
                     {(baseline.mad_wpm || 14).toFixed(1)}
                   </span>
                 </div>
-                <div className="p-2.5 bg-[var(--apple-bg)] rounded-xl border border-[var(--apple-border)]">
-                  <span className="text-[10px] text-[var(--apple-text-secondary)] block">Pause Ratio</span>
-                  <span className="text-base font-extrabold text-[var(--apple-text-primary)]">
+                <div className="p-3 border border-[var(--oculus-hairline)] bg-[var(--oculus-bg)]">
+                  <span className="text-[var(--oculus-muted)] block uppercase tracking-[0.18em]">PAUSE RATIO</span>
+                  <span className="font-display text-xl font-semibold text-[var(--oculus-ink)] tabular-nums mt-0.5 block">
                     {Math.round((baseline.baseline_pause_ratio || 0.12) * 100)}%
                   </span>
                 </div>
               </div>
             ) : (
-              <p className="text-xs text-[var(--apple-text-secondary)]">
-                Calibrating speech baseline against Question 0 (&ldquo;Tell me about yourself&rdquo;) to prevent ESL bias...
+              <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--oculus-muted)] leading-relaxed">
+                Listening to Question 0 formulation (&quot;Tell me about yourself&quot;) to establish non-native ESL baseline.
               </p>
             )}
           </div>
 
-          {/* Vision Proctoring & Gaze Anomaly Monitor */}
-          <div className="apple-card p-5 space-y-4">
-            <div className="flex items-center justify-between border-b border-[var(--apple-border)] pb-2.5">
-              <span className="text-xs font-extrabold text-[var(--apple-text-primary)] uppercase tracking-wider">
-                Vision & Gaze Monitor (1 FPS)
+          {/* Optical & Gaze Telemetry Card */}
+          <div className="border border-[var(--oculus-hairline)] bg-[var(--oculus-surface)] p-5 space-y-4">
+            <div className="flex items-center justify-between border-b border-[var(--oculus-hairline)] pb-3">
+              <span className="font-mono text-[10px] uppercase tracking-[0.26em] text-[var(--oculus-muted)] font-semibold">
+                OPTICAL SENTINEL (1 FPS)
               </span>
-              <span className="apple-badge text-[10px] bg-sky-500/10 text-sky-600 font-mono">
-                Debounced ≥3000ms
+              <span className="border border-[var(--oculus-hairline)] px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.2em] text-[var(--oculus-muted)]">
+                DEBOUNCED ≥3000MS
               </span>
             </div>
 
-            {/* Video / Snapshot Preview Area */}
-            <div className="w-full h-44 rounded-2xl bg-black flex flex-col items-center justify-center text-white relative overflow-hidden border border-[var(--apple-border)]">
-              <div className="absolute top-3 left-3 flex items-center gap-1.5 apple-badge bg-black/60 text-white border border-white/20 text-[10px]">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 live-pulse"></span>
-                <span>TELEMETRY ACTIVE</span>
+            {/* Video Reticle Preview Frame */}
+            <div className="w-full h-44 bg-[var(--oculus-bg)] border border-[var(--oculus-hairline)] flex flex-col items-center justify-center relative overflow-hidden">
+              {/* Reticle lines */}
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-20">
+                <div className="w-24 h-24 border border-current rounded-full" />
+                <div className="absolute h-full w-px bg-current" />
+                <div className="absolute w-full h-px bg-current" />
               </div>
 
-              <div className="text-center space-y-1">
-                <span className="text-3xl block">👁️</span>
-                <span className="text-xs font-bold">OpenCV & Haar Facial Tracking</span>
-                <span className="text-[10px] text-slate-400 block">3-Tier Funnel: Zero GPU</span>
+              <div className="absolute top-3 left-3 flex items-center gap-2 border border-[var(--oculus-hairline)] bg-[var(--oculus-surface)] px-2 py-1 font-mono text-[9px] uppercase tracking-[0.22em] text-[var(--oculus-ink)]">
+                <span className="h-1.5 w-1.5 rounded-full bg-[#10B981] animate-pulse" />
+                <span>TRACKING NOMINAL</span>
+              </div>
+
+              <div className="text-center space-y-1 font-mono">
+                <span className="text-2xl text-[var(--oculus-ink)] opacity-60">◎</span>
+                <span className="text-[10.5px] uppercase tracking-[0.22em] font-semibold text-[var(--oculus-ink)] block">
+                  OPENCV OPTICAL GAZE TRACKER
+                </span>
+                <span className="text-[9px] uppercase tracking-[0.18em] text-[var(--oculus-muted)] block">
+                  3-TIER FUNNEL // CPU OPTIMIZED
+                </span>
               </div>
             </div>
 
             {/* Vision Telemetry Status Indicators */}
-            <div className="grid grid-cols-3 gap-2 text-center text-xs">
-              <div className="p-2 bg-[var(--apple-bg)] rounded-xl border border-[var(--apple-border)]">
-                <span className="text-[10px] text-[var(--apple-text-secondary)] block">Gaze Offset</span>
-                <span className="font-bold text-[var(--apple-text-primary)]">Center (±2°)</span>
+            <div className="grid grid-cols-3 gap-2 text-center font-mono text-[9.5px]">
+              <div className="p-2.5 border border-[var(--oculus-hairline)] bg-[var(--oculus-bg)]">
+                <span className="text-[var(--oculus-muted)] uppercase tracking-[0.16em] block">GAZE OFFSET</span>
+                <span className="font-bold text-[var(--oculus-ink)] mt-0.5 block">CENTER (±2°)</span>
               </div>
-              <div className="p-2 bg-[var(--apple-bg)] rounded-xl border border-[var(--apple-border)]">
-                <span className="text-[10px] text-[var(--apple-text-secondary)] block">Head Pose</span>
-                <span className="font-bold text-[var(--apple-text-primary)]">Normal</span>
+              <div className="p-2.5 border border-[var(--oculus-hairline)] bg-[var(--oculus-bg)]">
+                <span className="text-[var(--oculus-muted)] uppercase tracking-[0.16em] block">HEAD POSE</span>
+                <span className="font-bold text-[var(--oculus-ink)] mt-0.5 block">NOMINAL</span>
               </div>
-              <div className="p-2 bg-[var(--apple-bg)] rounded-xl border border-[var(--apple-border)]">
-                <span className="text-[10px] text-[var(--apple-text-secondary)] block">Faces in View</span>
-                <span className="font-bold text-[var(--apple-text-primary)]">1 Face</span>
+              <div className="p-2.5 border border-[var(--oculus-hairline)] bg-[var(--oculus-bg)]">
+                <span className="text-[var(--oculus-muted)] uppercase tracking-[0.16em] block">SUBJECT COUNT</span>
+                <span className="font-bold text-[var(--oculus-ink)] mt-0.5 block">1 FACE</span>
               </div>
             </div>
 
             {/* Vision Anomaly Timeline Feed */}
-            <div className="space-y-2">
-              <span className="text-xs font-bold text-[var(--apple-text-secondary)] block">
-                Confirmed Vision Flags ({visionEvents.length})
+            <div className="space-y-2 pt-1 font-mono text-[10px]">
+              <span className="text-[var(--oculus-muted)] uppercase tracking-[0.2em] block font-semibold">
+                CONFIRMED OPTICAL FLAGS ({visionEvents.length})
               </span>
 
               {visionEvents.length === 0 ? (
-                <div className="p-3 bg-[var(--apple-bg)] rounded-xl text-center text-[11px] text-[var(--apple-text-secondary)]">
-                  No sustained (&ge;3s) gaze or device anomalies detected.
+                <div className="p-3 border border-[var(--oculus-hairline)] bg-[var(--oculus-bg)] text-center text-[9.5px] uppercase tracking-[0.16em] text-[var(--oculus-muted)]">
+                  NO SUSTAINED (&ge;3S) GAZE DEFLECTIONS LOGGED
                 </div>
               ) : (
                 <div className="space-y-2 max-h-48 overflow-y-auto">
                   {visionEvents.map((evt) => (
                     <div
                       key={evt.event_id}
-                      className="p-2.5 rounded-xl border border-rose-500/20 bg-rose-500/5 text-xs flex items-center justify-between"
+                      className="p-2.5 border border-[#E12D1E]/30 bg-[#E12D1E]/5 flex items-center justify-between"
                     >
                       <div className="space-y-0.5">
-                        <span className="font-bold text-rose-600 block">{evt.anomaly_type}</span>
-                        <span className="text-[10px] text-[var(--apple-text-secondary)]">
-                          Sustained {Math.round(evt.duration_ms / 1000)}s
-                          {evt.vlm_verification_note && ` • VLM: ${evt.vlm_verification_note}`}
+                        <span className="font-bold text-[#E12D1E] block">{evt.anomaly_type}</span>
+                        <span className="text-[9px] uppercase tracking-[0.14em] text-[var(--oculus-muted)]">
+                          SUSTAINED {Math.round(evt.duration_ms / 1000)}S
+                          {evt.vlm_verification_note && ` · VLM: ${evt.vlm_verification_note}`}
                         </span>
                       </div>
-                      <span className="apple-badge text-[10px] font-mono">
-                        {Math.floor(evt.timestamp_ms / 1000)}s
+                      <span className="border border-[#E12D1E]/30 px-2 py-0.5 tabular-nums text-[9px] text-[#E12D1E]">
+                        AT {Math.floor(evt.timestamp_ms / 1000)}S
                       </span>
                     </div>
                   ))}

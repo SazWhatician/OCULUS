@@ -1,0 +1,183 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 520" width="100%" height="auto">
+  <defs>
+    <style>
+      .bg { fill: #0B0B0C; }
+      .box { fill: #121214; stroke: #27272A; stroke-width: 1.2; rx: 0; }
+      .box-highlight { fill: #18181B; stroke: #3F3F46; stroke-width: 1.5; }
+      .box-alert { fill: #1C1315; stroke: #7F1D1D; stroke-width: 1.5; }
+      .text-title { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; font-weight: 700; fill: #F4F4F5; letter-spacing: 0.1em; }
+      .text-body { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 9.5px; fill: #A1A1AA; line-height: 1.4; }
+      .text-tag { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 8px; font-weight: 600; fill: #71717A; letter-spacing: 0.08em; }
+      .conn { stroke: #52525C; stroke-width: 1.2; stroke-dasharray: 3 3; fill: none; }
+      .conn-solid { stroke: #71717A; stroke-width: 1.4; fill: none; }
+      .arrow { fill: #71717A; }
+      .grid { stroke: #1E1E22; stroke-width: 1; stroke-dasharray: 2 4; }
+
+      @media (prefers-color-scheme: light) {
+        .bg { fill: #FAFAFA; }
+        .box { fill: #FFFFFF; stroke: #E4E4E7; }
+        .box-highlight { fill: #F4F4F5; stroke: #D4D4D8; }
+        .box-alert { fill: #FEF2F2; stroke: #FCA5A5; }
+        .text-title { fill: #09090B; }
+        .text-body { fill: #52525C; }
+        .text-tag { fill: #A1A1AA; }
+        .conn { stroke: #D4D4D8; }
+        .conn-solid { stroke: #A1A1AA; }
+        .arrow { fill: #A1A1AA; }
+        .grid { stroke: #E4E4E7; }
+      }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="6" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 1 L 8 5 L 0 9 z" class="arrow" />
+    </marker>
+  </defs>
+
+  <rect width="1100" height="520" class="bg" />
+
+  <!-- Grid overlay -->
+  <line x1="30" y1="50" x2="1070" y2="50" class="grid" />
+  <line x1="30" y1="470" x2="1070" y2="470" class="grid" />
+
+  <!-- Section Header -->
+  <text x="30" y="32" class="text-title" font-size="12">OCULUS FORENSIC PIPELINE // RECEPTOR SPECIFICATION v2.4</text>
+  <text x="1070" y="32" text-anchor="end" class="text-tag">CASCADE TOPOLOGY // STREAM LATENCY &lt; 15MS</text>
+
+  <!-- COLUMN 1: INGESTION & CALIBRATION (x: 30) -->
+  <g transform="translate(30, 60)">
+    <rect width="210" height="390" class="box" />
+    <text x="16" y="26" class="text-title">00 // INGESTION &amp; CALIBRATION</text>
+    <text x="16" y="42" class="text-tag">DUAL-STREAM CHUNKER</text>
+
+    <!-- Block 1: Ingestion Sources -->
+    <rect x="14" y="60" width="182" height="74" class="box-highlight" />
+    <text x="24" y="80" class="text-title" font-size="10">STREAM INGESTION</text>
+    <text x="24" y="98" class="text-body">• Zoom / Meet / Teams (Attendee)</text>
+    <text x="24" y="112" class="text-body">• Direct WebRTC MediaPipe</text>
+    <text x="24" y="124" class="text-body">• Redis Stream: `stream:audio`</text>
+
+    <!-- Block 2: Stage 0 Baseline -->
+    <rect x="14" y="150" width="182" height="130" class="box-highlight" />
+    <text x="24" y="172" class="text-title" font-size="10">STAGE 0: Q0 CALIBRATION</text>
+    <text x="24" y="190" class="text-body">• Empirical Bayes Prior Shrinkage</text>
+    <text x="24" y="204" class="text-body">• Sliding Window Median/MAD WPM</text>
+    <text x="24" y="218" class="text-body">• Natural Disfluency Baseline</text>
+    <text x="24" y="232" class="text-body">• Resting Iris Gaze Centroid</text>
+    <text x="24" y="246" class="text-body">• Head Pose Yaw/Pitch Neutral</text>
+    <text x="24" y="266" class="text-tag">PROTECTS ESL &amp; NEURODIVERGENT</text>
+
+    <!-- Block 3: STT Diarization -->
+    <rect x="14" y="296" width="182" height="74" class="box-highlight" />
+    <text x="24" y="318" class="text-title" font-size="10">HYBRID STT ROUTER</text>
+    <text x="24" y="336" class="text-body">• Speechmatics Diarizer (S1/S2)</text>
+    <text x="24" y="350" class="text-body">• Groq Whisper (Isolated Track)</text>
+  </g>
+
+  <!-- Connection Col 1 -> Col 2 -->
+  <line x1="240" y1="210" x2="290" y2="210" class="conn-solid" marker-end="url(#arrow)" />
+
+  <!-- COLUMN 2: DETERMINISTIC HEURISTICS (x: 290) -->
+  <g transform="translate(290, 60)">
+    <rect width="250" height="390" class="box" />
+    <text x="16" y="26" class="text-title">01 // DETERMINISTIC FORENSICS</text>
+    <text x="16" y="42" class="text-tag">0MS PURE PYTHON ENGINE</text>
+
+    <!-- Prosodic & Disfluency -->
+    <rect x="14" y="60" width="222" height="78" class="box-highlight" />
+    <text x="24" y="80" class="text-title" font-size="10">PROSODIC TELEMETRY</text>
+    <text x="24" y="98" class="text-body">• Robust WPM Z-Score (vs MAD)</text>
+    <text x="24" y="112" class="text-body">• Disfluency Collapse Detection</text>
+    <text x="24" y="126" class="text-body">• TTFS Latency Stall Before Delivery</text>
+
+    <!-- Cadence & Linguistic -->
+    <rect x="14" y="150" width="222" height="88" class="box-highlight" />
+    <text x="24" y="172" class="text-title" font-size="10">LINGUISTIC &amp; CADENCE</text>
+    <text x="24" y="190" class="text-body">• Inter-Word Pause CV (Teleprompter)</text>
+    <text x="24" y="204" class="text-body">• Tier-A/B Spoken LLM Cliché Regex</text>
+    <text x="24" y="218" class="text-body">• 1st-Person Ownership Deficit</text>
+    <text x="24" y="230" class="text-body">• Opening Question Mirroring Echo</text>
+
+    <!-- Visual Saccade & Device -->
+    <rect x="14" y="250" width="222" height="88" class="box-highlight" />
+    <text x="24" y="272" class="text-title" font-size="10">OCULAR &amp; POSTURAL</text>
+    <text x="24" y="290" class="text-body">• Horizontal Saccade Reading Sweep</text>
+    <text x="24" y="304" class="text-body">• Sustained Downward Lap Gaze (3s)</text>
+    <text x="24" y="318" class="text-body">• Multi-Face &amp; Micro-Motion Freeze</text>
+    <text x="24" y="330" class="text-body">• Secondary Device Handheld Flag</text>
+
+    <!-- Security Scanner -->
+    <rect x="14" y="350" width="222" height="34" class="box-alert" />
+    <text x="24" y="371" class="text-title" font-size="9" fill="#F87171">SECURITY: PROMPT INJECTION SCANNER</text>
+  </g>
+
+  <!-- Connection Col 2 -> Col 3 (Gating) -->
+  <line x1="540" y1="210" x2="590" y2="210" class="conn-solid" marker-end="url(#arrow)" />
+  <line x1="540" y1="365" x2="590" y2="365" class="conn-solid" stroke="#DC2626" marker-end="url(#arrow)" />
+
+  <!-- COLUMN 3: GATED LLM JUDGE (x: 590) -->
+  <g transform="translate(590, 60)">
+    <rect width="240" height="390" class="box" />
+    <text x="16" y="26" class="text-title">02 // COGNITIVE LLM JUDGE</text>
+    <text x="16" y="42" class="text-tag">ESCALATED ON ANOMALIES ONLY (~15%)</text>
+
+    <!-- Pre-filter Gate -->
+    <rect x="14" y="60" width="212" height="74" class="box-highlight" />
+    <text x="24" y="80" class="text-title" font-size="10">SIGNAL-AWARE GATE</text>
+    <text x="24" y="98" class="text-body">• Filters ~80-85% normal turns ($0)</text>
+    <text x="24" y="112" class="text-body">• Trivial mic checks return None</text>
+    <text x="24" y="124" class="text-body">• Injections bypass gate instantly</text>
+
+    <!-- Dual Router & Failover -->
+    <rect x="14" y="146" width="212" height="92" class="box-highlight" />
+    <text x="24" y="168" class="text-title" font-size="10">CIRCUIT-BREAKER ROUTER</text>
+    <text x="24" y="186" class="text-body">• Primary: Groq Llama 3.3 70B</text>
+    <text x="24" y="200" class="text-body">• Secondary: Gemini 2.5 Flash</text>
+    <text x="24" y="214" class="text-body">• SLA Deadline &lt; 22s Timeout</text>
+    <text x="24" y="228" class="text-body">• LRU Idempotency Redelivery Cache</text>
+
+    <!-- Zero-Trust Verification -->
+    <rect x="14" y="250" width="212" height="80" class="box-highlight" />
+    <text x="24" y="272" class="text-title" font-size="10">ZERO-TRUST VERIFIER</text>
+    <text x="24" y="290" class="text-body">• Strict Verbatim Quote Verification</text>
+    <text x="24" y="304" class="text-body">• Unverified quotes clamped to 58.0</text>
+    <text x="24" y="318" class="text-body">• Anti-Bias ESL/Senior Steelmanning</text>
+
+    <!-- Dual Judge Consensus -->
+    <rect x="14" y="342" width="212" height="42" class="box-highlight" />
+    <text x="24" y="360" class="text-title" font-size="9">HIGH-RISK CONSENSUS</text>
+    <text x="24" y="374" class="text-body">Cross-verifies scores &gt;= 75 across models</text>
+  </g>
+
+  <!-- Connection Col 3 -> Col 4 -->
+  <line x1="830" y1="210" x2="880" y2="210" class="conn-solid" marker-end="url(#arrow)" />
+
+  <!-- COLUMN 4: FUSION & AGGREGATION (x: 880) -->
+  <g transform="translate(880, 60)">
+    <rect width="190" height="390" class="box" />
+    <text x="16" y="26" class="text-title">03 // FUSION &amp; REPORT</text>
+    <text x="16" y="42" class="text-tag">ANTI-DILUTION TOP-K</text>
+
+    <!-- Turn Fusion -->
+    <rect x="14" y="60" width="162" height="88" class="box-highlight" />
+    <text x="24" y="80" class="text-title" font-size="10">TURN RISK FUSION</text>
+    <text x="24" y="98" class="text-body">0.35 × Deterministic</text>
+    <text x="24" y="112" class="text-body">+ 0.65 × LLM Judge</text>
+    <text x="24" y="126" class="text-body">+ Multimodal Vision Boost</text>
+    <text x="24" y="138" class="text-tag">CONFIDENCE-WEIGHTED</text>
+
+    <!-- Anti Dilution Aggregator -->
+    <rect x="14" y="160" width="162" height="96" class="box-highlight" />
+    <text x="24" y="182" class="text-title" font-size="10">ANTI-DILUTION</text>
+    <text x="24" y="200" class="text-body">0.45 × Length-Weighted</text>
+    <text x="24" y="214" class="text-body">+ 0.55 × Top-2 High Turns</text>
+    <text x="24" y="234" class="text-body">Prevents verbosity from washing out cheating turns</text>
+
+    <!-- Deliverables -->
+    <rect x="14" y="268" width="162" height="116" class="box-highlight" />
+    <text x="24" y="290" class="text-title" font-size="10">DISPATCH OUTPUTS</text>
+    <text x="24" y="308" class="text-body">• Real-Time WebSocket</text>
+    <text x="24" y="322" class="text-body">• Forensic Ledger Report</text>
+    <text x="24" y="336" class="text-body">• Verbatim Quote Cards</text>
+    <text x="24" y="350" class="text-body">• Advisory Follow-Up Probes</text>
+    <text x="24" y="366" class="text-tag">ADVISORY HUMAN-IN-THE-LOOP</text>
+  </g>
+</svg>

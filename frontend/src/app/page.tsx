@@ -243,16 +243,16 @@ export default function HomePage() {
   return (
     <div
       ref={rootRef}
-      className="relative min-h-screen bg-[#FBFBF9] text-[#0A0A0A] selection:bg-[#0A0A0A] selection:text-[#FBFBF9]"
+      className="relative min-h-screen bg-[var(--oculus-bg)] text-[var(--oculus-ink)] selection:bg-[var(--oculus-ink)] selection:text-[var(--oculus-bg)]"
     >
       <OpticalFieldCanvas />
 
-      <div className="relative z-10 mx-auto max-w-[1380px] border-x border-[#0A0A0A]/12 bg-[#FBFBF9]/80 backdrop-blur-[2px]">
-        <header className="flex flex-wrap items-center justify-between gap-4 border-b border-[#0A0A0A]/12 px-5 py-3.5 font-mono text-[10px] uppercase tracking-[0.26em] text-[#525252] sm:px-8">
+      <div className="relative z-10 mx-auto max-w-[1380px] border-x border-[var(--oculus-hairline)] bg-[var(--oculus-bg)]/80 backdrop-blur-[2px]">
+        <header className="flex flex-wrap items-center justify-between gap-4 border-b border-[var(--oculus-hairline)] px-5 py-3.5 font-mono text-[10px] uppercase tracking-[0.26em] text-[var(--oculus-muted)] sm:px-8">
           <div className="flex items-center gap-3">
-            <span className="inline-block h-2 w-2 bg-[#0A0A0A]" />
-            <span className="font-semibold text-[#0A0A0A]">OCULUS // SENTINEL</span>
-            <span className="hidden text-[#0A0A0A]/30 sm:inline">|</span>
+            <span className="inline-block h-2 w-2 bg-[var(--oculus-ink)]" />
+            <span className="font-semibold text-[var(--oculus-ink)]">OCULUS // SENTINEL</span>
+            <span className="hidden text-[var(--oculus-ink)]/30 sm:inline">|</span>
             <span className="hidden sm:inline">MULTIMODAL INTEGRITY ENGINE</span>
           </div>
 
@@ -266,45 +266,45 @@ export default function HomePage() {
             <span className="hidden lg:inline">
               IRIS {gaze.dilation.toFixed(2)}X
             </span>
-            <span className="text-[#0A0A0A]">{clock}</span>
+            <span className="text-[var(--oculus-ink)]">{clock}</span>
           </div>
         </header>
 
-        <section className="relative border-b border-[#0A0A0A]/12">
+        <section className="relative border-b border-[var(--oculus-hairline)]">
           <div className="grid grid-cols-1 lg:grid-cols-12">
-            <div className="flex flex-col justify-between border-b border-[#0A0A0A]/12 p-6 sm:p-10 lg:col-span-7 lg:border-b-0 lg:border-r lg:p-14">
+            <div className="flex flex-col justify-between border-b border-[var(--oculus-hairline)] p-6 sm:p-10 lg:col-span-7 lg:border-b-0 lg:border-r lg:p-14">
               <div className="space-y-8">
-                <div className="hero-stagger flex items-center gap-3 font-mono text-[10px] uppercase tracking-[0.3em] text-[#525252]">
+                <div className="hero-stagger flex items-center gap-3 font-mono text-[10px] uppercase tracking-[0.3em] text-[var(--oculus-muted)]">
                   <span className="inline-flex h-2 w-2 items-center justify-center">
-                    <span className="h-1.5 w-1.5 rounded-full bg-[#0A0A0A]" />
+                    <span className="h-1.5 w-1.5 rounded-full bg-[var(--oculus-ink)]" />
                   </span>
                   <CipherReadout text="OPTICAL TELEMETRY // ZERO-SPYWARE ARCHITECTURE" />
                 </div>
 
-                <h1 className="hero-stagger font-display text-[clamp(2.8rem,6.5vw,5.6rem)] font-semibold leading-[0.94] tracking-[-0.045em] text-[#0A0A0A]">
+                <h1 className="hero-stagger font-display text-[clamp(2.8rem,6.5vw,5.6rem)] font-semibold leading-[0.94] tracking-[-0.045em] text-[var(--oculus-ink)]">
                   INTERVIEW
                   <br />
                   INTEGRITY.
                   <br />
-                  <span className="font-light italic tracking-[-0.03em] text-[#525252]">
+                  <span className="font-light italic tracking-[-0.03em] text-[var(--oculus-muted)]">
                     CALIBRATED.
                   </span>
                 </h1>
 
-                <div className="hero-rule h-px w-full bg-[#0A0A0A]/15" />
+                <div className="hero-rule h-px w-full bg-[var(--oculus-ink)]/15" />
 
-                <p className="hero-stagger max-w-xl text-[15px] leading-[1.7] text-[#404040] sm:text-[16px]">
+                <p className="hero-stagger max-w-xl text-[15px] leading-[1.7] text-[var(--oculus-muted)] sm:text-[16px]">
                   Exposes hidden generative teleprompters, voice synthesis, and
                   off-screen cognitive assistance via{" "}
-                  <strong className="font-semibold text-[#0A0A0A]">
+                  <strong className="font-semibold text-[var(--oculus-ink)]">
                     Hybrid STT
                   </strong>
                   ,{" "}
-                  <strong className="font-semibold text-[#0A0A0A]">
+                  <strong className="font-semibold text-[var(--oculus-ink)]">
                     Q0 Median/MAD baseline calibration
                   </strong>
                   , and a{" "}
-                  <strong className="font-semibold text-[#0A0A0A]">
+                  <strong className="font-semibold text-[var(--oculus-ink)]">
                     two-stage reasoning judge
                   </strong>
                   —operating purely on multimodal signal physics.
@@ -314,7 +314,7 @@ export default function HomePage() {
               <div className="hero-stagger mt-12 flex flex-wrap items-center gap-3">
                 <Link
                   href="/sessions/new"
-                  className="group relative inline-flex items-center gap-4 overflow-hidden border border-[#0A0A0A] bg-[#0A0A0A] px-7 py-4 font-mono text-[11px] font-medium uppercase tracking-[0.24em] text-[#FBFBF9] transition-colors duration-300 hover:bg-[#FBFBF9] hover:text-[#0A0A0A]"
+                  className="group relative inline-flex items-center gap-4 overflow-hidden border border-[var(--oculus-ink)] bg-[var(--oculus-ink)] px-7 py-4 font-mono text-[11px] font-medium uppercase tracking-[0.24em] text-[var(--oculus-bg)] transition-colors duration-300 hover:bg-[var(--oculus-bg)] hover:text-[var(--oculus-ink)]"
                 >
                   <span>+ LAUNCH SENTINEL</span>
                   <span className="transition-transform duration-300 group-hover:translate-x-1">
@@ -324,7 +324,7 @@ export default function HomePage() {
 
                 <Link
                   href="/reports"
-                  className="group inline-flex items-center gap-3 border border-[#0A0A0A]/25 bg-transparent px-7 py-4 font-mono text-[11px] font-medium uppercase tracking-[0.24em] text-[#0A0A0A] transition-all duration-300 hover:border-[#0A0A0A] hover:bg-[#0A0A0A] hover:text-[#FBFBF9]"
+                  className="group inline-flex items-center gap-3 border border-[var(--oculus-ink)]/25 bg-transparent px-7 py-4 font-mono text-[11px] font-medium uppercase tracking-[0.24em] text-[var(--oculus-ink)] transition-all duration-300 hover:border-[var(--oculus-ink)] hover:bg-[var(--oculus-ink)] hover:text-[var(--oculus-bg)]"
                 >
                   <span>AUDIT ARCHIVE</span>
                   <span className="transition-transform duration-300 group-hover:-translate-y-0.5 group-hover:translate-x-0.5">
@@ -334,11 +334,11 @@ export default function HomePage() {
               </div>
             </div>
 
-            <div className="relative flex min-h-[380px] flex-col items-center justify-center bg-[#FFFFFF] p-8 sm:p-12 lg:col-span-5">
-              <span className="pointer-events-none absolute left-4 top-4 font-mono text-[9px] tracking-[0.28em] text-[#737373]">
+            <div className="relative flex min-h-[380px] flex-col items-center justify-center bg-[var(--oculus-surface)] p-8 sm:p-12 lg:col-span-5">
+              <span className="pointer-events-none absolute left-4 top-4 font-mono text-[9px] tracking-[0.28em] text-[var(--oculus-muted)]">
                 FIG. 01 — APERTURE
               </span>
-              <span className="pointer-events-none absolute right-4 top-4 font-mono text-[9px] tracking-[0.28em] text-[#737373] tabular-nums">
+              <span className="pointer-events-none absolute right-4 top-4 font-mono text-[9px] tracking-[0.28em] text-[var(--oculus-muted)] tabular-nums">
                 V:{gaze.velocity.toFixed(1)}
               </span>
 
@@ -346,18 +346,18 @@ export default function HomePage() {
                 <OculusMark onTelemetry={setGaze} scrollRatio={scrollRatio} />
               </div>
 
-              <div className="pointer-events-none absolute inset-x-0 bottom-0 grid grid-cols-3 border-t border-[#0A0A0A]/12 font-mono text-[9px] uppercase tracking-[0.22em] text-[#525252] tabular-nums">
-                <div className="border-r border-[#0A0A0A]/12 px-4 py-2.5">
-                  <span className="block text-[#8A8A8A]">EULER.X</span>
-                  <span className="text-[#0A0A0A]">{formatSign(gaze.yaw)}°</span>
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 grid grid-cols-3 border-t border-[var(--oculus-hairline)] font-mono text-[9px] uppercase tracking-[0.22em] text-[var(--oculus-muted)] tabular-nums">
+                <div className="border-r border-[var(--oculus-hairline)] px-4 py-2.5">
+                  <span className="block text-[var(--oculus-muted)]">EULER.X</span>
+                  <span className="text-[var(--oculus-ink)]">{formatSign(gaze.yaw)}°</span>
                 </div>
-                <div className="border-r border-[#0A0A0A]/12 px-4 py-2.5">
-                  <span className="block text-[#8A8A8A]">EULER.Y</span>
-                  <span className="text-[#0A0A0A]">{formatSign(gaze.pitch)}°</span>
+                <div className="border-r border-[var(--oculus-hairline)] px-4 py-2.5">
+                  <span className="block text-[var(--oculus-muted)]">EULER.Y</span>
+                  <span className="text-[var(--oculus-ink)]">{formatSign(gaze.pitch)}°</span>
                 </div>
                 <div className="px-4 py-2.5">
-                  <span className="block text-[#8A8A8A]">STATE</span>
-                  <span className="text-[#0A0A0A]">
+                  <span className="block text-[var(--oculus-muted)]">STATE</span>
+                  <span className="text-[var(--oculus-ink)]">
                     {activeSessionsCount > 0 ? "TRACKING" : "NOMINAL"}
                   </span>
                 </div>
@@ -366,22 +366,22 @@ export default function HomePage() {
           </div>
         </section>
 
-        <section aria-label="Signal Telemetry Matrix" className="border-b border-[#0A0A0A]/12">
-          <div className="arch-reveal flex flex-wrap items-end justify-between gap-4 border-b border-[#0A0A0A]/12 px-6 py-5 sm:px-8">
+        <section aria-label="Signal Telemetry Matrix" className="border-b border-[var(--oculus-hairline)]">
+          <div className="arch-reveal flex flex-wrap items-end justify-between gap-4 border-b border-[var(--oculus-hairline)] px-6 py-5 sm:px-8">
             <div className="flex items-center gap-4">
-              <span className="font-mono text-[10px] tracking-[0.3em] text-[#737373]">
+              <span className="font-mono text-[10px] tracking-[0.3em] text-[var(--oculus-muted)]">
                 SEC. 01
               </span>
-              <h2 className="font-display text-lg font-semibold tracking-[-0.02em] text-[#0A0A0A]">
+              <h2 className="font-display text-lg font-semibold tracking-[-0.02em] text-[var(--oculus-ink)]">
                 SIGNAL ARCHITECTURE MATRIX
               </h2>
             </div>
-            <span className="font-mono text-[10px] uppercase tracking-[0.26em] text-[#525252]">
+            <span className="font-mono text-[10px] uppercase tracking-[0.26em] text-[var(--oculus-muted)]">
               <CipherReadout text="FOUR-STAGE MULTIMODAL PIPELINE" />
             </span>
           </div>
 
-          <div className="grid grid-cols-1 divide-y divide-[#0A0A0A]/12 sm:grid-cols-2 sm:divide-y-0 lg:grid-cols-4">
+          <div className="grid grid-cols-1 divide-y divide-[var(--oculus-hairline)] sm:grid-cols-2 sm:divide-y-0 lg:grid-cols-4">
             {metrics.map((m, idx) => {
               const hovered = hoveredMetric === idx;
               return (
@@ -389,17 +389,17 @@ export default function HomePage() {
                   key={m.index}
                   onMouseEnter={() => setHoveredMetric(idx)}
                   onMouseLeave={() => setHoveredMetric(null)}
-                  className="arch-reveal group relative flex flex-col justify-between overflow-hidden border-[#0A0A0A]/12 p-6 transition-colors duration-500 sm:border-b sm:odd:border-r lg:border-b-0 lg:border-r lg:last:border-r-0 lg:p-8"
+                  className="arch-reveal group relative flex flex-col justify-between overflow-hidden border-[var(--oculus-hairline)] p-6 transition-colors duration-500 sm:border-b sm:odd:border-r lg:border-b-0 lg:border-r lg:last:border-r-0 lg:p-8"
                 >
                   <div
-                    className={`pointer-events-none absolute inset-0 origin-bottom bg-[#0A0A0A] transition-transform duration-500 ease-[cubic-bezier(0.19,1,0.22,1)] ${
+                    className={`pointer-events-none absolute inset-0 origin-bottom bg-[var(--oculus-ink)] transition-transform duration-500 ease-[cubic-bezier(0.19,1,0.22,1)] ${
                       hovered ? "scale-y-100" : "scale-y-0"
                     }`}
                   />
 
                   <div
                     className={`relative z-10 flex items-center justify-between font-mono text-[10px] tracking-[0.28em] transition-colors duration-300 ${
-                      hovered ? "text-[#A3A3A3]" : "text-[#737373]"
+                      hovered ? "text-[var(--oculus-bg)]" : "text-[var(--oculus-muted)]"
                     }`}
                   >
                     <span>
@@ -408,8 +408,8 @@ export default function HomePage() {
                     <span
                       className={`border px-2 py-0.5 text-[9px] ${
                         hovered
-                          ? "border-[#FBFBF9]/30 text-[#FBFBF9]"
-                          : "border-[#0A0A0A]/20 text-[#0A0A0A]"
+                          ? "border-[var(--oculus-bg)]/30 text-[var(--oculus-bg)]"
+                          : "border-[var(--oculus-hairline)] text-[var(--oculus-ink)]"
                       }`}
                     >
                       {m.tag}
@@ -418,7 +418,7 @@ export default function HomePage() {
 
                   <div
                     className={`relative z-10 my-8 transition-colors duration-300 ${
-                      hovered ? "text-[#FBFBF9]" : "text-[#0A0A0A]"
+                      hovered ? "text-[var(--oculus-bg)]" : "text-[var(--oculus-ink)]"
                     }`}
                   >
                     <HarmonicWaveform freq={m.freq} active={hovered} />
@@ -427,7 +427,7 @@ export default function HomePage() {
                   <div className="relative z-10 space-y-2">
                     <div
                       className={`flex flex-wrap items-baseline gap-2 transition-colors duration-300 ${
-                        hovered ? "text-[#FBFBF9]" : "text-[#0A0A0A]"
+                        hovered ? "text-[var(--oculus-bg)]" : "text-[var(--oculus-ink)]"
                       }`}
                     >
                       <span className="font-display text-2xl font-semibold tracking-[-0.03em] tabular-nums">
@@ -435,7 +435,7 @@ export default function HomePage() {
                       </span>
                       <span
                         className={`font-mono text-[11px] ${
-                          hovered ? "text-[#A3A3A3]" : "text-[#525252]"
+                          hovered ? "text-[var(--oculus-bg)]/80" : "text-[var(--oculus-muted)]"
                         }`}
                       >
                         {m.unit}
@@ -443,7 +443,7 @@ export default function HomePage() {
                     </div>
                     <p
                       className={`font-mono text-[10px] tracking-[0.16em] transition-colors duration-300 ${
-                        hovered ? "text-[#D4D4D4]" : "text-[#666666]"
+                        hovered ? "text-[var(--oculus-bg)]/80" : "text-[var(--oculus-muted)]"
                       }`}
                     >
                       {m.spec}
@@ -455,54 +455,54 @@ export default function HomePage() {
           </div>
         </section>
 
-        <section aria-label="Ingestion Protocols" className="border-b border-[#0A0A0A]/12">
-          <div className="arch-reveal flex flex-wrap items-end justify-between gap-4 border-b border-[#0A0A0A]/12 px-6 py-5 sm:px-8">
+        <section aria-label="Ingestion Protocols" className="border-b border-[var(--oculus-hairline)]">
+          <div className="arch-reveal flex flex-wrap items-end justify-between gap-4 border-b border-[var(--oculus-hairline)] px-6 py-5 sm:px-8">
             <div className="flex items-center gap-4">
-              <span className="font-mono text-[10px] tracking-[0.3em] text-[#737373]">
+              <span className="font-mono text-[10px] tracking-[0.3em] text-[var(--oculus-muted)]">
                 SEC. 02
               </span>
-              <h2 className="font-display text-lg font-semibold tracking-[-0.02em] text-[#0A0A0A]">
+              <h2 className="font-display text-lg font-semibold tracking-[-0.02em] text-[var(--oculus-ink)]">
                 PROCTORING INGESTION PROTOCOLS
               </h2>
             </div>
-            <span className="font-mono text-[10px] uppercase tracking-[0.26em] text-[#525252]">
+            <span className="font-mono text-[10px] uppercase tracking-[0.26em] text-[var(--oculus-muted)]">
               ZERO-COST SANDBOX TIERS ENABLED
             </span>
           </div>
 
-          <div className="grid grid-cols-1 divide-y divide-[#0A0A0A]/12 md:grid-cols-3 md:divide-x md:divide-y-0">
+          <div className="grid grid-cols-1 divide-y divide-[var(--oculus-hairline)] md:grid-cols-3 md:divide-x md:divide-y-0">
             {modes.map((mode) => (
               <Link
                 key={mode.num}
                 href={mode.href}
-                className="arch-reveal group relative flex flex-col justify-between bg-[#FBFBF9] p-8 transition-colors duration-500 hover:bg-[#0A0A0A] hover:text-[#FBFBF9] lg:p-10"
+                className="arch-reveal group relative flex flex-col justify-between bg-[var(--oculus-bg)] p-8 transition-colors duration-500 hover:bg-[var(--oculus-ink)] hover:text-[var(--oculus-bg)] lg:p-10"
               >
                 <div className="space-y-8">
-                  <div className="flex items-center justify-between font-mono text-[10px] tracking-[0.26em] text-[#737373] transition-colors group-hover:text-[#A3A3A3]">
+                  <div className="flex items-center justify-between font-mono text-[10px] tracking-[0.26em] text-[var(--oculus-muted)] transition-colors group-hover:text-[var(--oculus-ink)]">
                     <span>MODE {mode.num}</span>
                     <span className="border border-current px-2 py-0.5 text-[9px]">
                       {mode.tier}
                     </span>
                   </div>
 
-                  <div className="py-2 text-[#0A0A0A] transition-colors duration-500 group-hover:text-[#FBFBF9]">
+                  <div className="py-2 text-[var(--oculus-ink)] transition-colors duration-500 group-hover:text-[var(--oculus-bg)]">
                     <IngestionSchematic variant={mode.variant} />
                   </div>
 
                   <div className="space-y-3">
-                    <span className="block font-mono text-[9px] tracking-[0.28em] text-[#737373] group-hover:text-[#A3A3A3]">
+                    <span className="block font-mono text-[9px] tracking-[0.28em] text-[var(--oculus-muted)] group-hover:text-[var(--oculus-ink)]">
                       {mode.code}
                     </span>
                     <h3 className="font-display text-2xl font-semibold tracking-[-0.03em]">
                       {mode.title}
                     </h3>
-                    <p className="text-[13.5px] leading-[1.68] text-[#525252] transition-colors group-hover:text-[#D4D4D4]">
+                    <p className="text-[13.5px] leading-[1.68] text-[var(--oculus-muted)] transition-colors group-hover:text-[var(--oculus-ink)]">
                       {mode.body}
                     </p>
                   </div>
                 </div>
 
-                <div className="mt-10 flex items-center justify-between border-t border-[#0A0A0A]/12 pt-5 font-mono text-[10px] tracking-[0.26em] transition-colors group-hover:border-[#FBFBF9]/20">
+                <div className="mt-10 flex items-center justify-between border-t border-[var(--oculus-hairline)] pt-5 font-mono text-[10px] tracking-[0.26em] transition-colors group-hover:border-[var(--oculus-ink)]/20">
                   <span>{mode.action}</span>
                   <span className="inline-flex h-7 w-7 items-center justify-center border border-current transition-transform duration-300 group-hover:translate-x-1">
                     →
@@ -514,17 +514,17 @@ export default function HomePage() {
         </section>
 
         <section aria-label="Interview Sessions Ledger">
-          <div className="arch-reveal flex flex-col justify-between gap-5 border-b border-[#0A0A0A]/12 px-6 py-6 sm:px-8 lg:flex-row lg:items-center">
+          <div className="arch-reveal flex flex-col justify-between gap-5 border-b border-[var(--oculus-hairline)] px-6 py-6 sm:px-8 lg:flex-row lg:items-center">
             <div className="space-y-1">
               <div className="flex items-center gap-4">
-                <span className="font-mono text-[10px] tracking-[0.3em] text-[#737373]">
+                <span className="font-mono text-[10px] tracking-[0.3em] text-[var(--oculus-muted)]">
                   SEC. 03
                 </span>
-                <h2 className="font-display text-lg font-semibold tracking-[-0.02em] text-[#0A0A0A]">
+                <h2 className="font-display text-lg font-semibold tracking-[-0.02em] text-[var(--oculus-ink)]">
                   INTERVIEW SESSIONS LEDGER
                 </h2>
               </div>
-              <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#737373]">
+              <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-[var(--oculus-muted)]">
                 LIVE STREAM STATUS · CALIBRATED RISK INDICES · AUDIT DISPATCH
               </p>
             </div>
@@ -536,11 +536,11 @@ export default function HomePage() {
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="SEARCH CANDIDATE / ROLE"
-                  className="w-56 border border-[#0A0A0A]/20 bg-[#FFFFFF] px-3.5 py-2 font-mono text-[10px] uppercase tracking-[0.18em] text-[#0A0A0A] placeholder:text-[#8A8A8A] focus:border-[#0A0A0A] focus:outline-none"
+                  className="w-56 border border-[var(--oculus-hairline)] bg-[var(--oculus-surface)] px-3.5 py-2 font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--oculus-ink)] placeholder:text-[var(--oculus-muted)] focus:border-[var(--oculus-ink)] focus:outline-none"
                 />
               </div>
 
-              <div className="inline-flex border border-[#0A0A0A]/20 bg-[#FFFFFF]">
+              <div className="inline-flex border border-[var(--oculus-hairline)] bg-[var(--oculus-surface)]">
                 {(["ALL", "LIVE", "COMPLETED"] as FilterTab[]).map((tab) => {
                   const active = activeFilter === tab;
                   return (
@@ -550,8 +550,8 @@ export default function HomePage() {
                       onClick={() => setActiveFilter(tab)}
                       className={`px-3.5 py-2 font-mono text-[10px] tracking-[0.22em] transition-colors ${
                         active
-                          ? "bg-[#0A0A0A] text-[#FBFBF9]"
-                          : "text-[#525252] hover:text-[#0A0A0A]"
+                          ? "bg-[var(--oculus-ink)] text-[var(--oculus-bg)]"
+                          : "text-[var(--oculus-muted)] hover:text-[var(--oculus-ink)]"
                       }`}
                     >
                       {tab}
@@ -563,30 +563,30 @@ export default function HomePage() {
               <button
                 type="button"
                 onClick={() => loadData(true)}
-                className="border border-[#0A0A0A]/20 bg-[#FFFFFF] px-3.5 py-2 font-mono text-[10px] tracking-[0.22em] text-[#0A0A0A] transition-colors hover:border-[#0A0A0A] hover:bg-[#0A0A0A] hover:text-[#FBFBF9]"
+                className="border border-[var(--oculus-hairline)] bg-[var(--oculus-surface)] px-3.5 py-2 font-mono text-[10px] tracking-[0.22em] text-[var(--oculus-ink)] transition-colors hover:border-[var(--oculus-ink)] hover:bg-[var(--oculus-ink)] hover:text-[var(--oculus-bg)]"
               >
                 {refreshing ? "SYNCING..." : "SYNC"}
               </button>
             </div>
           </div>
 
-          <div className="draw-rule h-px w-full bg-[#0A0A0A]/12" />
+          <div className="draw-rule h-px w-full bg-[var(--oculus-ink)]/12" />
 
-          <div className="bg-[#FFFFFF]">
+          <div className="bg-[var(--oculus-surface)]">
             {loading ? (
-              <div className="divide-y divide-[#0A0A0A]/10">
+              <div className="divide-y divide-[var(--oculus-hairline)]">
                 {[0, 1, 2].map((i) => (
                   <div
                     key={i}
                     className="grid grid-cols-12 items-center gap-4 px-6 py-6 sm:px-8"
                   >
                     <div className="col-span-4 space-y-2">
-                      <div className="h-3.5 w-40 animate-pulse bg-[#0A0A0A]/10" />
-                      <div className="h-2.5 w-24 animate-pulse bg-[#0A0A0A]/5" />
+                      <div className="h-3.5 w-40 animate-pulse bg-[var(--oculus-ink)]/10" />
+                      <div className="h-2.5 w-24 animate-pulse bg-[var(--oculus-ink)]/5" />
                     </div>
-                    <div className="col-span-3 h-3 w-28 animate-pulse bg-[#0A0A0A]/10" />
-                    <div className="col-span-3 h-3 w-24 animate-pulse bg-[#0A0A0A]/10" />
-                    <div className="col-span-2 ml-auto h-7 w-20 animate-pulse bg-[#0A0A0A]/10" />
+                    <div className="col-span-3 h-3 w-28 animate-pulse bg-[var(--oculus-ink)]/10" />
+                    <div className="col-span-3 h-3 w-24 animate-pulse bg-[var(--oculus-ink)]/10" />
+                    <div className="col-span-2 ml-auto h-7 w-20 animate-pulse bg-[var(--oculus-ink)]/10" />
                   </div>
                 ))}
               </div>
@@ -596,40 +596,40 @@ export default function HomePage() {
                   <path
                     d="M 10 22 C 42 -2, 78 -2, 110 24 L 92 34 C 72 52, 48 52, 26 32"
                     fill="none"
-                    stroke="#0A0A0A"
+                    stroke="currentColor"
                     strokeWidth="6"
                   />
                   <path
                     d="M 110 38 C 78 62, 42 62, 10 36 L 28 26 C 48 8, 72 8, 94 28"
                     fill="none"
-                    stroke="#0A0A0A"
+                    stroke="currentColor"
                     strokeWidth="6"
                   />
-                  <circle cx="60" cy="30" r="6" fill="#0A0A0A" />
+                  <circle cx="60" cy="30" r="6" fill="currentColor" />
                 </svg>
-                <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-[#0A0A0A]">
+                <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-[var(--oculus-ink)]">
                   LEDGER EMPTY // NO ACTIVE SESSIONS
                 </p>
-                <p className="mt-2 max-w-md text-[13px] text-[#666666]">
+                <p className="mt-2 max-w-md text-[13px] text-[var(--oculus-muted)]">
                   Initialize your first sentinel stream via local recording,
                   WebRTC browser capture, or live headless bot dispatch.
                 </p>
                 <Link
                   href="/sessions/new"
-                  className="mt-7 border border-[#0A0A0A] bg-[#0A0A0A] px-6 py-3 font-mono text-[10px] tracking-[0.26em] text-[#FBFBF9] transition-colors hover:bg-[#FBFBF9] hover:text-[#0A0A0A]"
+                  className="mt-7 border border-[var(--oculus-ink)] bg-[var(--oculus-ink)] px-6 py-3 font-mono text-[10px] tracking-[0.26em] text-[var(--oculus-bg)] transition-colors hover:bg-[var(--oculus-bg)] hover:text-[var(--oculus-ink)]"
                 >
                   + INITIALIZE SESSION
                 </Link>
               </div>
             ) : filteredSessions.length === 0 ? (
-              <div className="px-6 py-20 text-center font-mono text-[11px] uppercase tracking-[0.26em] text-[#737373]">
+              <div className="px-6 py-20 text-center font-mono text-[11px] uppercase tracking-[0.26em] text-[var(--oculus-muted)]">
                 NO RECORDS MATCH CURRENT FILTER PREDICATE
               </div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full border-collapse text-left">
                   <thead>
-                    <tr className="border-b border-[#0A0A0A]/12 bg-[#FBFBF9] font-mono text-[9.5px] uppercase tracking-[0.26em] text-[#737373]">
+                    <tr className="border-b border-[var(--oculus-hairline)] bg-[var(--oculus-bg)] font-mono text-[9.5px] uppercase tracking-[0.26em] text-[var(--oculus-muted)]">
                       <th className="px-6 py-4 sm:px-8">CANDIDATE // ROLE</th>
                       <th className="px-6 py-4">INGESTION</th>
                       <th className="px-6 py-4">STATUS</th>
@@ -637,7 +637,7 @@ export default function HomePage() {
                       <th className="px-6 py-4 text-right sm:px-8">DISPATCH</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-[#0A0A0A]/10">
+                  <tbody className="divide-y divide-[var(--oculus-hairline)]">
                     {filteredSessions.map((s) => {
                       const isCompleted = s.status === "COMPLETED";
                       const isLive = isLiveStatus(s.status);
@@ -652,18 +652,18 @@ export default function HomePage() {
                       return (
                         <tr
                           key={s.id}
-                          className="group transition-colors duration-200 hover:bg-[#0A0A0A] hover:text-[#FBFBF9]"
+                          className="group transition-colors duration-200 hover:bg-[var(--oculus-ink)] hover:text-[var(--oculus-bg)]"
                         >
                           <td className="px-6 py-5 sm:px-8">
                             <div className="font-display text-[15px] font-semibold tracking-[-0.015em]">
                               {s.candidate_name}
                             </div>
-                            <div className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.16em] text-[#737373] group-hover:text-[#A3A3A3]">
+                            <div className="mt-0.5 font-mono text-[10px] uppercase tracking-[0.16em] text-[var(--oculus-muted)] group-hover:text-[var(--oculus-ink)]">
                               {s.job_title}
                             </div>
                           </td>
 
-                          <td className="px-6 py-5 font-mono text-[10px] tracking-[0.18em] text-[#525252] group-hover:text-[#D4D4D4]">
+                          <td className="px-6 py-5 font-mono text-[10px] tracking-[0.18em] text-[var(--oculus-muted)] group-hover:text-[var(--oculus-bg)]/80">
                             {formatMode(s.ingestion_mode)}
                           </td>
 
@@ -723,7 +723,7 @@ export default function HomePage() {
                             <div className="inline-flex items-center gap-2">
                               <Link
                                 href={`/sessions/${s.id}`}
-                                className="inline-flex items-center gap-2 border border-[#0A0A0A]/25 px-3.5 py-2 font-mono text-[9.5px] uppercase tracking-[0.22em] transition-colors group-hover:border-[#FBFBF9]/40 group-hover:text-[#FBFBF9] hover:!bg-[#FBFBF9] hover:!text-[#0A0A0A]"
+                                className="inline-flex items-center gap-2 border border-[var(--oculus-ink)]/25 px-3.5 py-2 font-mono text-[9.5px] uppercase tracking-[0.22em] transition-colors group-hover:border-[var(--oculus-bg)]/40 group-hover:text-[var(--oculus-bg)] hover:!bg-[var(--oculus-bg)] hover:!text-[var(--oculus-ink)]"
                               >
                                 <span>MONITOR</span>
                                 <span>→</span>
@@ -732,7 +732,7 @@ export default function HomePage() {
                               {isCompleted && (
                                 <Link
                                   href={`/reports/${s.id}`}
-                                  className="inline-flex items-center border border-[#0A0A0A] bg-[#0A0A0A] px-3.5 py-2 font-mono text-[9.5px] uppercase tracking-[0.22em] text-[#FBFBF9] transition-colors group-hover:border-[#FBFBF9] group-hover:bg-[#FBFBF9] group-hover:text-[#0A0A0A]"
+                                  className="inline-flex items-center border border-[var(--oculus-ink)] bg-[var(--oculus-ink)] px-3.5 py-2 font-mono text-[9.5px] uppercase tracking-[0.22em] text-[var(--oculus-bg)] transition-colors group-hover:border-[var(--oculus-bg)] group-hover:bg-[var(--oculus-bg)] group-hover:text-[var(--oculus-ink)]"
                                 >
                                   REPORT
                                 </Link>
@@ -748,14 +748,14 @@ export default function HomePage() {
             )}
           </div>
 
-          <footer className="flex flex-wrap items-center justify-between gap-4 border-t border-[#0A0A0A]/12 bg-[#FBFBF9] px-6 py-4 font-mono text-[10px] uppercase tracking-[0.24em] text-[#737373] sm:px-8">
+          <footer className="flex flex-wrap items-center justify-between gap-4 border-t border-[var(--oculus-hairline)] bg-[var(--oculus-surface)] px-6 py-4 font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--oculus-muted)] sm:px-8">
             <span className="tabular-nums">
               RECORDS: {String(filteredSessions.length).padStart(2, "0")} /{" "}
               {String(sessions.length).padStart(2, "0")} · POLL 5000MS
             </span>
             <Link
               href="/reports"
-              className="text-[#0A0A0A] transition-opacity hover:opacity-60"
+              className="text-[var(--oculus-ink)] transition-opacity hover:opacity-60"
             >
               COMPLETE AUDIT LEDGER ↗
             </Link>

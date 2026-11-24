@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 340" width="100%" height="auto">
+  <defs>
+    <style>
+      .bg { fill: #0B0B0C; }
+      .grid { stroke: #222226; stroke-width: 1; stroke-dasharray: 2 4; }
+      .grid-major { stroke: #2B2B32; stroke-width: 1; }
+      .accent { stroke: #52525C; stroke-width: 1.5; }
+      .ink-primary { fill: #F4F4F5; }
+      .ink-secondary { fill: #A1A1AA; }
+      .ink-tertiary { fill: #71717A; }
+      .reticle { stroke: #E4E4E7; stroke-width: 1; fill: none; }
+      .code-font { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+      .title-font { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; font-weight: 800; letter-spacing: -0.03em; }
+
+      @media (prefers-color-scheme: light) {
+        .bg { fill: #FBFBF9; }
+        .grid { stroke: #E4E4E7; }
+        .grid-major { stroke: #D4D4D8; }
+        .accent { stroke: #A1A1AA; }
+        .ink-primary { fill: #09090B; }
+        .ink-secondary { fill: #52525C; }
+        .ink-tertiary { fill: #71717A; }
+        .reticle { stroke: #18181B; }
+      }
+    </style>
+    <pattern id="dot-grid" x="0" y="0" width="24" height="24" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1" fill="#71717A" opacity="0.25" />
+    </pattern>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1200" height="340" class="bg" />
+  <rect width="1200" height="340" fill="url(#dot-grid)" />
+
+  <!-- Frame border with industrial corner crops -->
+  <line x1="24" y1="24" x2="1176" y2="24" class="grid-major" />
+  <line x1="24" y1="316" x2="1176" y2="316" class="grid-major" />
+  <line x1="24" y1="24" x2="24" y2="316" class="grid-major" />
+  <line x1="1176" y1="24" x2="1176" y2="316" class="grid-major" />
+
+  <!-- Reticle Corners -->
+  <path d="M 20 36 L 20 20 L 36 20" class="reticle" stroke-width="2" />
+  <path d="M 1164 20 L 1180 20 L 1180 36" class="reticle" stroke-width="2" />
+  <path d="M 20 304 L 20 320 L 36 320" class="reticle" stroke-width="2" />
+  <path d="M 1164 320 L 1180 320 L 1180 304" class="reticle" stroke-width="2" />
+
+  <!-- Technical HUD Metadata Left -->
+  <text x="44" y="52" class="code-font ink-tertiary" font-size="11" font-weight="600" letter-spacing="0.12em">SYS.SPEC // ORBITAL FORENSIC SUITE</text>
+  <text x="44" y="70" class="code-font ink-tertiary" font-size="9" letter-spacing="0.08em">APERTURE: F/1.2 // COGNITIVE RECEPTOR</text>
+
+  <!-- Technical HUD Metadata Right -->
+  <text x="1156" y="52" text-anchor="end" class="code-font ink-tertiary" font-size="11" font-weight="600" letter-spacing="0.12em">VER 2.4.0 // STABLE</text>
+  <text x="1156" y="70" text-anchor="end" class="code-font ink-tertiary" font-size="9" letter-spacing="0.08em">LATENCY BUDGET &lt; 1.2MS // STAGE 1</text>
+
+  <!-- Center Graphic: Brutalist Optical Eye Icon (Scaled & Offset) -->
+  <g transform="translate(180, 85) scale(0.48)">
+    <path
+      class="ink-primary"
+      fill-rule="evenodd"
+      d="M2,102L1,152L150,66L171,56L192,49L216,44L256,43L293,50L315,58L438,128L439,130L404,151L395,154L305,102L290,95L270,89L249,86L218,88L205,91L182,100L1,204L1,257L129,331L156,344L176,351L215,359L258,360L282,357L311,350L351,333L479,259L479,209L336,292L314,303L295,310L267,316L225,317L192,311L167,302L44,232L44,229L86,205L177,258L200,268L232,274L265,272L287,266L306,257L478,158L479,102L353,29L333,19L309,10L280,3L255,0L215,1L172,10L130,28Z M130,180L209,135L234,129L257,130L281,138L349,177L352,180L274,225L249,231L225,230L205,224L133,183Z"
+    />
+    <circle cx="240" cy="180" r="36.4" class="ink-primary" />
+  </g>
+
+  <!-- Typography Right of Logo -->
+  <g transform="translate(460, 120)">
+    <!-- Primary Badge -->
+    <rect x="0" y="0" width="138" height="20" rx="0" fill="none" class="reticle" stroke-width="1" />
+    <text x="69" y="14" text-anchor="middle" class="code-font ink-primary" font-size="10" font-weight="700" letter-spacing="0.16em">FIG. 01 // SENTINEL</text>
+
+    <!-- Main Title -->
+    <text x="0" y="66" class="title-font ink-primary" font-size="58" letter-spacing="0.08em">O C U L U S</text>
+
+    <!-- Subtitle -->
+    <text x="0" y="96" class="code-font ink-secondary" font-size="13" font-weight="600" letter-spacing="0.18em">
+      MULTIMODAL FORENSIC INTERVIEW INTEGRITY ENGINE
+    </text>
+
+    <!-- Descriptor line -->
+    <text x="0" y="122" class="code-font ink-tertiary" font-size="11" letter-spacing="0.06em">
+      Real-Time Detection of Spoken GenAI Recitation, Teleprompter Saccades, &amp; Synthesis Artifacts
+    </text>
+  </g>
+
+  <!-- Bottom Ticker Bar -->
+  <line x1="24" y1="288" x2="1176" y2="288" class="grid-major" />
+  <g class="code-font ink-tertiary" font-size="9" letter-spacing="0.1em">
+    <text x="44" y="306">DETERMINISTIC STAGE 1 (0ms)</text>
+    <text x="280" y="306">CIRCUIT-BREAKER LLM REASONING</text>
+    <text x="560" y="306">SACCADIC GAZE TRAJECTORY MODEL</text>
+    <text x="860" y="306">BAYESIAN BASELINE CALIBRATION</text>
+    <text x="1156" y="306" text-anchor="end">TOP-K ANTI-DILUTION</text>
+  </g>
+</svg>

@@ -1,45 +1,73 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef } from "react";
 
 export type ThemeOption = "light" | "dark" | "cream" | "warm" | "sage" | "obsidian" | "ocean";
 
 interface ThemeItem {
   id: ThemeOption;
   name: string;
-  category: "Light" | "Dark";
-  colorPreview: string; // Tailwind gradient / swatch
-  icon: string;
+  polarity: "LIGHT" | "DARK";
+  accent: string;
 }
 
 const THEMES: ThemeItem[] = [
-  { id: "light", name: "Apple Light", category: "Light", colorPreview: "bg-slate-200 border-blue-500", icon: "☀️" },
-  { id: "cream", name: "Vanilla Cream", category: "Light", colorPreview: "bg-amber-100 border-amber-600", icon: "🍦" },
-  { id: "warm", name: "Warm Sandstone", category: "Light", colorPreview: "bg-orange-200 border-orange-700", icon: "🏜️" },
-  { id: "sage", name: "Nordic Sage", category: "Light", colorPreview: "bg-emerald-100 border-emerald-600", icon: "🌲" },
-  { id: "dark", name: "Apple Dark", category: "Dark", colorPreview: "bg-black border-blue-400", icon: "🌙" },
-  { id: "obsidian", name: "Velvet Obsidian", category: "Dark", colorPreview: "bg-purple-950 border-purple-500", icon: "🍇" },
-  { id: "ocean", name: "Oceanic Azure", category: "Dark", colorPreview: "bg-sky-950 border-sky-400", icon: "🌊" },
+  { id: "light", name: "Paper Bone", polarity: "LIGHT", accent: "#0A0A0A" },
+  { id: "dark", name: "Pitch Charcoal", polarity: "DARK", accent: "#FBFBF9" },
+  { id: "cream", name: "Vanilla Cream", polarity: "LIGHT", accent: "#B45309" },
+  { id: "warm", name: "Warm Sandstone", polarity: "LIGHT", accent: "#C2410C" },
+  { id: "sage", name: "Nordic Sage", polarity: "LIGHT", accent: "#059669" },
+  { id: "obsidian", name: "Velvet Obsidian", polarity: "DARK", accent: "#A855F7" },
+  { id: "ocean", name: "Deep Ocean", polarity: "DARK", accent: "#38BDF8" },
 ];
 
 export default function ThemeSwitcher() {
   const [currentTheme, setCurrentTheme] = useState<ThemeOption>("light");
   const [isOpen, setIsOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const isDark = currentTheme === "dark" || currentTheme === "obsidian" || currentTheme === "ocean";
 
   useEffect(() => {
     setMounted(true);
-    const savedTheme = (localStorage.getItem("verimeet_theme") as ThemeOption) || "light";
-    const validTheme = THEMES.some((t) => t.id === savedTheme) ? savedTheme : "light";
-    setCurrentTheme(validTheme);
-    document.documentElement.setAttribute("data-theme", validTheme);
+    const saved =
+      (localStorage.getItem("oculus_theme") as ThemeOption) ||
+      (localStorage.getItem("verimeet_theme") as ThemeOption) ||
+      (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+
+    const valid = THEMES.some((t) => t.id === saved) ? saved : "light";
+    applyTheme(valid, false);
   }, []);
 
-  // Close dropdown on outside click
+  const applyTheme = (theme: ThemeOption, dispatch = true) => {
+    setCurrentTheme(theme);
+    localStorage.setItem("oculus_theme", theme);
+    localStorage.setItem("verimeet_theme", theme);
+
+    const doc = document.documentElement;
+    doc.setAttribute("data-theme", theme);
+    const darkNow = theme === "dark" || theme === "obsidian" || theme === "ocean";
+    if (darkNow) {
+      doc.classList.add("dark");
+    } else {
+      doc.classList.remove("dark");
+    }
+
+    if (dispatch && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("oculus-theme-change", { detail: { theme, darkNow } }));
+    }
+  };
+
+  // 1-Click Polarity Inverter: Invert between pure Light (#FBFBF9) and pure Dark (#0A0A0A)
+  const togglePolarity = () => {
+    const nextTheme: ThemeOption = isDark ? "light" : "dark";
+    applyTheme(nextTheme);
+  };
+
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
         setIsOpen(false);
       }
     }
@@ -47,69 +75,82 @@ export default function ThemeSwitcher() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const selectTheme = (theme: ThemeOption) => {
-    setCurrentTheme(theme);
-    localStorage.setItem("verimeet_theme", theme);
-    document.documentElement.setAttribute("data-theme", theme);
-    setIsOpen(false);
-  };
-
-  if (!mounted) return null;
-
-  const activeThemeObj = THEMES.find((t) => t.id === currentTheme) || THEMES[0];
+  if (!mounted) {
+    return (
+      <div className="h-7 w-24 border border-[var(--oculus-hairline)] bg-[var(--oculus-surface)] opacity-40 animate-pulse" />
+    );
+  }
 
   return (
-    <div className="relative inline-block text-left" ref={dropdownRef}>
-      {/* Trigger Button */}
+    <div className="relative inline-flex items-center" ref={containerRef}>
+      {/* Primary Inverter Button */}
       <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="apple-button-secondary px-3.5 py-1.5 text-xs flex items-center gap-2 font-semibold transition-all shadow-sm"
+        type="button"
+        onClick={togglePolarity}
+        title={isDark ? "Invert color to Light (black becomes white)" : "Invert color to Dark (white becomes black)"}
+        aria-label="Invert color polarity"
+        className="group relative flex items-center gap-2 border border-[var(--oculus-hairline)] bg-[var(--oculus-surface)] px-2.5 py-1.5 font-mono text-[9.5px] uppercase tracking-[0.24em] text-[var(--oculus-ink)] transition-all hover:border-[var(--oculus-ink)] hover:bg-[var(--oculus-bg)] focus:outline-none"
       >
-        <span>{activeThemeObj.icon}</span>
-        <span className="hidden sm:inline">{activeThemeObj.name}</span>
-        <svg
-          className={`w-3.5 h-3.5 transition-transform duration-200 ${isOpen ? "rotate-180" : ""}`}
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
-        </svg>
+        {/* Optical Aperture Half-Circle Inverter Glyphs */}
+        <span className="relative flex h-3.5 w-3.5 items-center justify-center transition-transform duration-500 ease-[cubic-bezier(0.19,1,0.22,1)] group-hover:scale-110">
+          <svg
+            viewBox="0 0 16 16"
+            className={`h-3.5 w-3.5 transition-transform duration-700 ease-[cubic-bezier(0.19,1,0.22,1)] ${isDark ? "rotate-180" : "rotate-0"
+              }`}
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            {/* Outer border circle */}
+            <circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" strokeWidth="1.2" />
+            {/* Filled half for optical contrast */}
+            <path d="M 8 1 A 7 7 0 0 1 8 15 Z" fill="currentColor" />
+          </svg>
+        </span>
+
+        {/* Readout */}
+        <span className="font-semibold tracking-[0.26em]">
+          INV // <span className="tabular-nums">{isDark ? "LIGHT" : "DARK"}</span>
+        </span>
       </button>
 
-      {/* Dropdown Menu */}
+      {/* Palette Selector Trigger */}
+      <button
+        type="button"
+        onClick={() => setIsOpen((prev) => !prev)}
+        title="More tonal calibrations"
+        aria-label="Open tonal palette options"
+        className="flex items-center justify-center border-y border-r border-[var(--oculus-hairline)] bg-[var(--oculus-surface)] px-1.5 py-1.5 font-mono text-[9px] text-[var(--oculus-muted)] transition-colors hover:border-[var(--oculus-ink)] hover:text-[var(--oculus-ink)]"
+      >
+        <span className={`transition-transform duration-300 ${isOpen ? "rotate-180" : ""}`}>▾</span>
+      </button>
+
+      {/* Dropdown for other tonal calibrated palettes */}
       {isOpen && (
-        <div className="absolute right-0 mt-2 w-56 rounded-2xl bg-[var(--apple-surface-translucent)] backdrop-blur-2xl border border-[var(--apple-border)] shadow-2xl p-1.5 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
-          <div className="px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-wider text-[var(--apple-text-muted)] border-b border-[var(--apple-border)] mb-1">
-            Theme Palette ({THEMES.length} Options)
+        <div className="absolute right-0 top-full z-50 mt-1.5 w-48 border border-[var(--oculus-hairline)] bg-[var(--oculus-surface)] p-1 shadow-2xl backdrop-blur-xl animate-in fade-in slide-in-from-top-1 duration-150 font-mono text-[10px]">
+          <div className="border-b border-[var(--oculus-hairline)] px-2.5 py-1.5 text-[8.5px] uppercase tracking-[0.28em] text-[var(--oculus-muted)]">
+            OPTICAL CALIBRATIONS
           </div>
 
-          <div className="space-y-0.5">
+          <div className="mt-1 flex flex-col gap-0.5">
             {THEMES.map((t) => {
-              const isSelected = currentTheme === t.id;
+              const active = currentTheme === t.id;
               return (
                 <button
                   key={t.id}
-                  onClick={() => selectTheme(t.id)}
-                  className={`w-full px-3 py-2 rounded-xl text-xs font-semibold flex items-center justify-between transition-all ${
-                    isSelected
-                      ? "bg-[var(--apple-accent)] text-white shadow-sm font-bold"
-                      : "text-[var(--apple-text-primary)] hover:bg-[var(--apple-bg)]"
-                  }`}
+                  type="button"
+                  onClick={() => {
+                    applyTheme(t.id);
+                    setIsOpen(false);
+                  }}
+                  className={`flex items-center justify-between px-2.5 py-1.5 text-left transition-colors ${active
+                      ? "bg-[var(--oculus-ink)] text-[var(--oculus-bg)] font-semibold"
+                      : "text-[var(--oculus-ink)] hover:bg-[var(--oculus-bg)]"
+                    }`}
                 >
-                  <div className="flex items-center gap-2.5">
-                    <span className="text-sm">{t.icon}</span>
-                    <span>{t.name}</span>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <span className={`w-3 h-3 rounded-full border ${t.colorPreview}`}></span>
-                    {isSelected && (
-                      <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M5 13l4 4L19 7" />
-                      </svg>
-                    )}
-                  </div>
+                  <span className="tracking-[0.14em] uppercase">{t.name}</span>
+                  <span className="text-[8px] uppercase tracking-[0.2em] opacity-60">
+                    {t.polarity}
+                  </span>
                 </button>
               );
             })}
@@ -119,3 +160,5 @@ export default function ThemeSwitcher() {
     </div>
   );
 }
+
+

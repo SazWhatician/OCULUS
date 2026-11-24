@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, Suspense } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { createSession, uploadDemoFile, WS_BASE_URL } from "@/lib/api";
@@ -73,10 +73,9 @@ function NewSessionContent() {
   // Handle Tab 2 WebRTC Tab Capture Submit
   const handleWebRTCStart = async () => {
     setIsCapturing(true);
-    setCaptureStatus("Initializing session...");
+    setCaptureStatus("INITIALIZING PIPELINE BUFFER...");
 
     try {
-      // 1. Create session record
       const session = await createSession({
         candidate_name: candidateName,
         interviewer_name: interviewerName,
@@ -85,68 +84,44 @@ function NewSessionContent() {
         ingestion_mode: "browser_webrtc",
       });
 
-      setCaptureStatus("Requesting browser tab with audio...");
+      setCaptureStatus("REQUESTING BROWSER SCREEN/TAB MEDIA STREAM...");
 
-      // 2. Request screen/tab capture with tab audio
       const stream = await navigator.mediaDevices.getDisplayMedia({
         video: { displaySurface: "browser" },
         audio: true,
       });
 
-      setCaptureStatus("Connecting to OCULUS Ingestion WebSocket...");
+      setCaptureStatus("CONNECTING TO OCULUS INGESTION WEBSOCKET...");
       const wsUrl = `${WS_BASE_URL}/ws/ingest/${session.session_id}`;
       const ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
-        setCaptureStatus("WebRTC tab streaming live! Redirecting to monitor...");
+        setCaptureStatus("SENTINEL LINK ESTABLISHED · STREAMING CHUNKS");
 
-        // Setup MediaRecorder for 5-second audio chunks
-        const audioTracks = stream.getAudioTracks();
-        if (audioTracks.length > 0) {
-          const audioStream = new MediaStream(audioTracks);
-          const recorder = new MediaRecorder(audioStream, { mimeType: "audio/webm;codecs=opus" });
-          recorder.ondataavailable = async (e) => {
-            if (e.data && e.data.size > 0 && ws.readyState === WebSocket.OPEN) {
-              const buffer = await e.data.arrayBuffer();
-              ws.send(buffer);
-            }
-          };
-          recorder.start(5000);
-        }
-
-        // Setup 1 FPS video frame sampler via hidden canvas
-        const video = document.createElement("video");
-        video.srcObject = stream;
-        video.muted = true;
-        video.play();
-
-        const canvas = document.createElement("canvas");
-        canvas.width = 640;
-        canvas.height = 360;
-        const ctx = canvas.getContext("2d");
-
-        const frameInterval = setInterval(() => {
-          if (ctx && video.readyState >= 2 && ws.readyState === WebSocket.OPEN) {
-            ctx.drawImage(video, 0, 0, 640, 360);
-            const jpegDataUrl = canvas.toDataURL("image/jpeg", 0.75);
-            ws.send(JSON.stringify({ type: "video_frame", data_url: jpegDataUrl }));
+        const mediaRecorder = new MediaRecorder(stream, { mimeType: "video/webm; codecs=vp8,opus" });
+        mediaRecorder.ondataavailable = async (event) => {
+          if (event.data.size > 0 && ws.readyState === WebSocket.OPEN) {
+            const buffer = await event.data.arrayBuffer();
+            ws.send(buffer);
           }
-        }, 1000);
-
-        stream.getVideoTracks()[0].onended = () => {
-          clearInterval(frameInterval);
-          ws.close();
         };
 
-        // Redirect recruiter to live monitor
+        mediaRecorder.start(5000);
+
+        stream.getVideoTracks()[0].onended = () => {
+          mediaRecorder.stop();
+          ws.close();
+          router.push(`/sessions/${session.session_id}`);
+        };
+
         setTimeout(() => {
           router.push(`/sessions/${session.session_id}`);
-        }, 1500);
+        }, 1200);
       };
 
-      ws.onerror = (err) => {
-        console.error("WebRTC Ingestion WS error:", err);
-        router.push(`/sessions/${session.session_id}`);
+      ws.onerror = () => {
+        setCaptureStatus("WEBSOCKET STREAM ERROR — REVERTING");
+        setIsCapturing(false);
       };
     } catch (err: any) {
       alert(`Capture failed: ${err.message}`);
@@ -184,143 +159,187 @@ function NewSessionContent() {
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-8">
-      {/* Header */}
-      <div className="space-y-2 text-center md:text-left">
-        <Link href="/" className="text-xs font-semibold text-[var(--apple-accent)] hover:underline inline-flex items-center gap-1">
-          ← Back to Dashboard
-        </Link>
-        <h1 className="text-3xl font-extrabold text-[var(--apple-text-primary)] tracking-tight">
-          Launch New Proctoring Sentinel
-        </h1>
-        <p className="text-[var(--apple-text-secondary)] text-sm max-w-2xl">
-          Choose an ingestion mode below. All modes route through the identical Redis Stream event pipeline with
-          hybrid STT, OpenCV vision debouncing, and Q0 baseline calibration.
-        </p>
+    <div className="max-w-5xl mx-auto space-y-8">
+      {/* Top Header */}
+      <div className="border-b border-[var(--oculus-hairline)] pb-6 space-y-3">
+        <div className="flex items-center justify-between">
+          <Link
+            href="/"
+            className="font-mono text-[10px] uppercase tracking-[0.28em] text-[var(--oculus-muted)] hover:text-[var(--oculus-ink)] transition-colors inline-flex items-center gap-2"
+          >
+            <span>←</span>
+            <span>INDEX // 01 DASHBOARD</span>
+          </Link>
+          <span className="font-mono text-[9px] uppercase tracking-[0.3em] text-[var(--oculus-muted)] border border-[var(--oculus-hairline)] px-2.5 py-1">
+            DISPATCH PROTOCOL // Q0_INIT
+          </span>
+        </div>
+
+        <div className="space-y-1">
+          <h1 className="font-display text-3xl font-semibold tracking-[-0.03em] text-[var(--oculus-ink)] sm:text-4xl">
+            INITIALIZE SENTINEL
+          </h1>
+          <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-[var(--oculus-muted)] max-w-2xl">
+            Deploy real-time multimodal stream analysis across candidate audio cadence, gaze deflection, and LLM telemetry.
+          </p>
+        </div>
       </div>
 
       {/* Mode Selector Tabs */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 p-1.5 bg-[var(--apple-bg)] rounded-2xl border border-[var(--apple-border)]">
+      <div className="grid grid-cols-1 md:grid-cols-3 border border-[var(--oculus-hairline)] bg-[var(--oculus-surface)] divide-y md:divide-y-0 md:divide-x divide-[var(--oculus-hairline)]">
         <button
           type="button"
           onClick={() => setActiveTab("demo_file")}
-          className={`px-4 py-3 rounded-xl text-left transition-all ${
+          className={`p-6 text-left transition-all relative ${
             activeTab === "demo_file"
-              ? "bg-[var(--apple-surface)] shadow-md border border-[var(--apple-border)] font-bold"
-              : "opacity-75 hover:opacity-100"
+              ? "bg-[var(--oculus-ink)] text-[var(--oculus-bg)]"
+              : "text-[var(--oculus-ink)] hover:bg-[var(--oculus-ink)]/5"
           }`}
         >
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-lg">📁</span>
-            <span className="apple-badge text-[10px] bg-blue-500/10 text-blue-600">Free $0</span>
+          <div className="flex items-center justify-between mb-3 font-mono text-[9px] tracking-[0.26em] uppercase">
+            <span>MODE // 01</span>
+            <span className={`px-2 py-0.5 border ${activeTab === "demo_file" ? "border-[var(--oculus-bg)]/40" : "border-[var(--oculus-hairline)]"}`}>
+              $0 FREE LOCAL
+            </span>
           </div>
-          <div className="text-xs font-extrabold text-[var(--apple-text-primary)]">Demo File Replay</div>
-          <div className="text-[11px] text-[var(--apple-text-secondary)]">Upload MP4 / WAV mock interview</div>
+          <div className="font-display text-base font-semibold tracking-[-0.02em] mb-1">
+            DEMO FILE REPLAY
+          </div>
+          <p className={`font-mono text-[10px] uppercase tracking-[0.16em] ${activeTab === "demo_file" ? "text-[var(--oculus-bg)]/75" : "text-[var(--oculus-muted)]"}`}>
+            Upload interview recording (.mp4 / .webm / .wav) with simulated timeline.
+          </p>
         </button>
 
         <button
           type="button"
           onClick={() => setActiveTab("browser_webrtc")}
-          className={`px-4 py-3 rounded-xl text-left transition-all ${
+          className={`p-6 text-left transition-all relative ${
             activeTab === "browser_webrtc"
-              ? "bg-[var(--apple-surface)] shadow-md border border-[var(--apple-border)] font-bold"
-              : "opacity-75 hover:opacity-100"
+              ? "bg-[var(--oculus-ink)] text-[var(--oculus-bg)]"
+              : "text-[var(--oculus-ink)] hover:bg-[var(--oculus-ink)]/5"
           }`}
         >
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-lg">🌐</span>
-            <span className="apple-badge text-[10px] bg-emerald-500/10 text-emerald-600">Zero-Key $0</span>
+          <div className="flex items-center justify-between mb-3 font-mono text-[9px] tracking-[0.26em] uppercase">
+            <span>MODE // 02</span>
+            <span className={`px-2 py-0.5 border ${activeTab === "browser_webrtc" ? "border-[var(--oculus-bg)]/40" : "border-[var(--oculus-hairline)]"}`}>
+              REAL-TIME WEBRTC
+            </span>
           </div>
-          <div className="text-xs font-extrabold text-[var(--apple-text-primary)]">Browser Tab Capture</div>
-          <div className="text-[11px] text-[var(--apple-text-secondary)]">Live WebRTC screen & tab audio</div>
+          <div className="font-display text-base font-semibold tracking-[-0.02em] mb-1">
+            BROWSER TAB CAPTURE
+          </div>
+          <p className={`font-mono text-[10px] uppercase tracking-[0.16em] ${activeTab === "browser_webrtc" ? "text-[var(--oculus-bg)]/75" : "text-[var(--oculus-muted)]"}`}>
+            Live client-side capture of Meet, Zoom, or Teams tab audio & video.
+          </p>
         </button>
 
         <button
           type="button"
           onClick={() => setActiveTab("attendee_bot")}
-          className={`px-4 py-3 rounded-xl text-left transition-all ${
+          className={`p-6 text-left transition-all relative ${
             activeTab === "attendee_bot"
-              ? "bg-[var(--apple-surface)] shadow-md border border-[var(--apple-border)] font-bold"
-              : "opacity-75 hover:opacity-100"
+              ? "bg-[var(--oculus-ink)] text-[var(--oculus-bg)]"
+              : "text-[var(--oculus-ink)] hover:bg-[var(--oculus-ink)]/5"
           }`}
         >
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-lg">🤖</span>
-            <span className="apple-badge text-[10px] bg-purple-500/10 text-purple-600">Cloud Bot</span>
+          <div className="flex items-center justify-between mb-3 font-mono text-[9px] tracking-[0.26em] uppercase">
+            <span>MODE // 03</span>
+            <span className={`px-2 py-0.5 border ${activeTab === "attendee_bot" ? "border-[var(--oculus-bg)]/40" : "border-[var(--oculus-hairline)]"}`}>
+              CLOUD BOT
+            </span>
           </div>
-          <div className="text-xs font-extrabold text-[var(--apple-text-primary)]">Meeting Bot Dispatch</div>
-          <div className="text-[11px] text-[var(--apple-text-secondary)]">Zoom / Google Meet URL</div>
+          <div className="font-display text-base font-semibold tracking-[-0.02em] mb-1">
+            HEADLESS BOT DISPATCH
+          </div>
+          <p className={`font-mono text-[10px] uppercase tracking-[0.16em] ${activeTab === "attendee_bot" ? "text-[var(--oculus-bg)]/75" : "text-[var(--oculus-muted)]"}`}>
+            Dispatch Attendee.dev silent recorder via meeting URL join credentials.
+          </p>
         </button>
       </div>
 
-      {/* Shared Candidate Profile Information */}
-      <div className="apple-card p-6 space-y-4">
-        <h2 className="text-xs font-bold text-[var(--apple-text-secondary)] uppercase tracking-wider">
-          1. Candidate & Target Role Setup
-        </h2>
+      {/* Shared Candidate Profile Configuration */}
+      <div className="border border-[var(--oculus-hairline)] bg-[var(--oculus-surface)] p-6 sm:p-8 space-y-6">
+        <div className="flex items-center justify-between border-b border-[var(--oculus-hairline)] pb-4">
+          <div className="flex items-center gap-3">
+            <span className="font-mono text-[10px] uppercase tracking-[0.3em] text-[var(--oculus-muted)]">
+              SEC. 01
+            </span>
+            <h2 className="font-display text-lg font-semibold tracking-[-0.02em] text-[var(--oculus-ink)]">
+              CANDIDATE & ROLE TELEMETRY
+            </h2>
+          </div>
+          <span className="font-mono text-[9px] uppercase tracking-[0.22em] text-[var(--oculus-muted)]">
+            REQUIRED SPECIFICATION
+          </span>
+        </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="space-y-1.5">
-            <label className="text-xs font-bold text-[var(--apple-text-primary)]">
-              Candidate Full Name <span className="text-rose-500">*</span>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="space-y-2">
+            <label className="block font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--oculus-muted)]">
+              Candidate Legal Name <span className="text-[#E12D1E]">*</span>
             </label>
             <input
               type="text"
               required
               value={candidateName}
               onChange={(e) => setCandidateName(e.target.value)}
-              className="w-full px-3.5 py-2.5 apple-input text-xs"
-              placeholder="e.g. Alex Johnson"
+              className="w-full border border-[var(--oculus-hairline)] bg-[var(--oculus-bg)] px-4 py-3 font-mono text-[11px] uppercase tracking-[0.16em] text-[var(--oculus-ink)] placeholder:text-[var(--oculus-muted)] focus:border-[var(--oculus-ink)] focus:outline-none transition-colors"
+              placeholder="E.G. ALEX JOHNSON"
             />
           </div>
 
-          <div className="space-y-1.5">
-            <label className="text-xs font-bold text-[var(--apple-text-primary)]">
-              Target Job Title <span className="text-rose-500">*</span>
+          <div className="space-y-2">
+            <label className="block font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--oculus-muted)]">
+              Target Job Classification <span className="text-[#E12D1E]">*</span>
             </label>
             <input
               type="text"
               required
               value={jobTitle}
               onChange={(e) => setJobTitle(e.target.value)}
-              className="w-full px-3.5 py-2.5 apple-input text-xs"
-              placeholder="e.g. Senior Backend Engineer"
+              className="w-full border border-[var(--oculus-hairline)] bg-[var(--oculus-bg)] px-4 py-3 font-mono text-[11px] uppercase tracking-[0.16em] text-[var(--oculus-ink)] placeholder:text-[var(--oculus-muted)] focus:border-[var(--oculus-ink)] focus:outline-none transition-colors"
+              placeholder="E.G. PRINCIPAL SYSTEMS ARCHITECT"
             />
           </div>
         </div>
 
-        <div className="space-y-1.5">
-          <label className="text-xs font-bold text-[var(--apple-text-primary)]">
-            Job Description & Technical Keywords (Seeds Speechmatics Dictionary)
+        <div className="space-y-2">
+          <label className="block font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--oculus-muted)]">
+            Technical Domain Lexicon (Seeds Hybrid STT Vocabulary & Heuristics)
           </label>
           <textarea
             rows={2}
             value={jobDescription}
             onChange={(e) => setJobDescription(e.target.value)}
-            className="w-full px-3.5 py-2.5 apple-input text-xs"
-            placeholder="Key technical terms (Kafka, Kubernetes, PyTorch) extracted automatically..."
+            className="w-full border border-[var(--oculus-hairline)] bg-[var(--oculus-bg)] px-4 py-3 font-mono text-[11px] uppercase tracking-[0.16em] text-[var(--oculus-ink)] placeholder:text-[var(--oculus-muted)] focus:border-[var(--oculus-ink)] focus:outline-none transition-colors"
+            placeholder="KAFKA, KUBERNETES, DISTRIBUTED TRANSACTIONS, RAFT CONSENSUS..."
           />
         </div>
       </div>
 
-      {/* Tab Specific Content */}
+      {/* Tab 1 Content: Demo File Upload */}
       {activeTab === "demo_file" && (
         <form onSubmit={handleDemoSubmit} className="space-y-6">
-          <div className="apple-card p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xs font-bold text-[var(--apple-text-secondary)] uppercase tracking-wider">
-                2. Upload Interview Recording (.mp4, .webm, .wav)
-              </h2>
-              <span className="apple-badge text-[11px] bg-blue-500/10 text-blue-600 font-mono">
-                100% Free Demo Mode
+          <div className="border border-[var(--oculus-hairline)] bg-[var(--oculus-surface)] p-6 sm:p-8 space-y-6">
+            <div className="flex items-center justify-between border-b border-[var(--oculus-hairline)] pb-4">
+              <div className="flex items-center gap-3">
+                <span className="font-mono text-[10px] uppercase tracking-[0.3em] text-[var(--oculus-muted)]">
+                  SEC. 02
+                </span>
+                <h2 className="font-display text-lg font-semibold tracking-[-0.02em] text-[var(--oculus-ink)]">
+                  INGEST AUDIO/VIDEO RECORDING
+                </h2>
+              </div>
+              <span className="font-mono text-[9px] uppercase tracking-[0.24em] text-[var(--oculus-muted)]">
+                FORMATS: .MP4, .WEBM, .WAV (MAX 150MB)
               </span>
             </div>
 
             <div
-              className={`border-2 border-dashed rounded-2xl p-8 text-center transition-colors cursor-pointer ${
+              className={`border border-dashed p-10 text-center transition-all cursor-pointer ${
                 selectedFile
-                  ? "border-[var(--apple-accent)] bg-[var(--apple-accent-light)]"
-                  : "border-[var(--apple-border)] hover:border-[var(--apple-accent)] bg-[var(--apple-bg)]"
+                  ? "border-[var(--oculus-ink)] bg-[var(--oculus-ink)]/5"
+                  : "border-[var(--oculus-hairline)] hover:border-[var(--oculus-ink)] bg-[var(--oculus-bg)]"
               }`}
               onClick={() => document.getElementById("file-input")?.click()}
             >
@@ -332,151 +351,171 @@ function NewSessionContent() {
                 onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
               />
 
-              <div className="space-y-2">
-                <span className="text-3xl block">📹</span>
-                <p className="text-sm font-bold text-[var(--apple-text-primary)]">
-                  {selectedFile ? selectedFile.name : "Click to select or drag and drop recording here"}
+              <div className="space-y-3">
+                <div className="font-mono text-2xl text-[var(--oculus-ink)] opacity-60">◫</div>
+                <p className="font-mono text-[12px] font-semibold uppercase tracking-[0.2em] text-[var(--oculus-ink)]">
+                  {selectedFile ? selectedFile.name : "CLICK TO BROWSE OR DRAG RECORDING STREAM HERE"}
                 </p>
-                <p className="text-xs text-[var(--apple-text-secondary)]">
-                  Supports MP4, WebM, and WAV up to 150 MB
+                <p className="font-mono text-[9.5px] uppercase tracking-[0.22em] text-[var(--oculus-muted)]">
+                  Automatic demuxing into 16kHz mono audio & 1 FPS optical frames
                 </p>
               </div>
             </div>
 
             {uploading && (
-              <div className="space-y-1.5">
-                <div className="flex justify-between text-xs text-[var(--apple-text-secondary)] font-semibold">
-                  <span>Uploading & extracting audio/video tracks via FFmpeg...</span>
-                  <span>{uploadProgress}%</span>
+              <div className="space-y-2 border border-[var(--oculus-hairline)] bg-[var(--oculus-bg)] p-4">
+                <div className="flex justify-between font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--oculus-muted)]">
+                  <span>EXTRACTION & EVENT INGESTION PROGRESS</span>
+                  <span className="text-[var(--oculus-ink)] tabular-nums">{uploadProgress}%</span>
                 </div>
-                <div className="w-full bg-[var(--apple-bg)] rounded-full h-2 overflow-hidden border border-[var(--apple-border)]">
+                <div className="w-full bg-[var(--oculus-hairline)] h-1.5 overflow-hidden">
                   <div
-                    className="bg-[var(--apple-accent)] h-2 transition-all duration-300 rounded-full"
+                    className="bg-[var(--oculus-ink)] h-full transition-all duration-300"
                     style={{ width: `${uploadProgress}%` }}
-                  ></div>
+                  />
                 </div>
               </div>
             )}
           </div>
 
-          <div className="flex justify-end gap-3">
-            <Link href="/" className="apple-button-secondary px-6 py-2.5 text-xs font-semibold">
-              Cancel
+          <div className="flex items-center justify-end gap-4">
+            <Link
+              href="/"
+              className="border border-[var(--oculus-hairline)] bg-transparent px-6 py-3.5 font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--oculus-ink)] hover:border-[var(--oculus-ink)] transition-colors"
+            >
+              ABORT
             </Link>
             <button
               type="submit"
               disabled={uploading}
-              className="apple-button-primary px-8 py-2.5 text-xs font-bold inline-flex items-center gap-2"
+              className="border border-[var(--oculus-ink)] bg-[var(--oculus-ink)] px-8 py-3.5 font-mono text-[10px] uppercase tracking-[0.26em] text-[var(--oculus-bg)] transition-colors hover:bg-[var(--oculus-bg)] hover:text-[var(--oculus-ink)] disabled:opacity-50"
             >
-              {uploading ? "Processing Replay..." : "Start Demo Replay →"}
+              {uploading ? "INGESTING REPLAY STREAM..." : "DISPATCH REPLAY SENTINEL →"}
             </button>
           </div>
         </form>
       )}
 
+      {/* Tab 2 Content: WebRTC Tab Capture */}
       {activeTab === "browser_webrtc" && (
         <div className="space-y-6">
-          <div className="apple-card p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xs font-bold text-[var(--apple-text-secondary)] uppercase tracking-wider">
-                2. Live Browser Tab & Screen Capture
-              </h2>
-              <span className="apple-badge text-[11px] bg-emerald-500/10 text-emerald-600 font-mono">
-                No Bot or ngrok Needed
+          <div className="border border-[var(--oculus-hairline)] bg-[var(--oculus-surface)] p-6 sm:p-8 space-y-6">
+            <div className="flex items-center justify-between border-b border-[var(--oculus-hairline)] pb-4">
+              <div className="flex items-center gap-3">
+                <span className="font-mono text-[10px] uppercase tracking-[0.3em] text-[var(--oculus-muted)]">
+                  SEC. 02
+                </span>
+                <h2 className="font-display text-lg font-semibold tracking-[-0.02em] text-[var(--oculus-ink)]">
+                  REAL-TIME BROWSER MEDIA CAPTURE
+                </h2>
+              </div>
+              <span className="font-mono text-[9px] uppercase tracking-[0.24em] text-[var(--oculus-muted)]">
+                CLIENT-SIDE ZERO SUBSCRIPTION
               </span>
             </div>
 
-            <p className="text-xs text-[var(--apple-text-secondary)] leading-relaxed">
-              Open your Zoom, Google Meet, or Microsoft Teams meeting in a Chrome/Edge browser tab or window.
-              When you click <strong>Capture Tab Audio & Video</strong>, choose the tab and check{" "}
-              <strong>&quot;Also share tab audio&quot;</strong>.
+            <p className="font-mono text-[11px] leading-relaxed uppercase tracking-[0.16em] text-[var(--oculus-muted)]">
+              Launch your Google Meet, Zoom Web, or Microsoft Teams meeting in an adjacent browser tab.
+              When prompted by the browser dialog, select the meeting tab and ensure <strong className="text-[var(--oculus-ink)]">&quot;SHARE TAB AUDIO&quot;</strong> is toggled.
             </p>
 
-            <div className="p-4 bg-[var(--apple-bg)] rounded-xl border border-[var(--apple-border)] text-xs space-y-2">
-              <div className="font-bold text-[var(--apple-text-primary)] flex items-center gap-2">
-                <span>💡</span> How it works:
+            <div className="border border-[var(--oculus-hairline)] bg-[var(--oculus-bg)] p-5 space-y-3 font-mono text-[10px] uppercase tracking-[0.2em]">
+              <div className="text-[var(--oculus-ink)] font-semibold flex items-center gap-2">
+                <span>//</span> PROTOCOL EXECUTION PHASES:
               </div>
-              <ul className="list-disc list-inside space-y-1 text-[var(--apple-text-secondary)]">
-                <li>Captures the candidate&apos;s speech and webcam video stream in real-time.</li>
-                <li>Transmits 5s audio chunks + 1 FPS video frames directly over WebSocket to the Sentinel workers.</li>
-                <li>Zero external API keys or bot subscriptions required for local testing.</li>
+              <ul className="space-y-1.5 text-[var(--oculus-muted)] pl-4">
+                <li>• Real-time candidate audio streamed in 5000ms chunk intervals.</li>
+                <li>• Optical gaze & face frame debouncing transmitted via WebSocket bus.</li>
+                <li>• Live median/MAD Q0 baseline established in first interview turn.</li>
               </ul>
             </div>
 
             {captureStatus && (
-              <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 rounded-xl text-xs font-bold flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 live-pulse"></span>
-                {captureStatus}
+              <div className="border border-[#E12D1E] bg-[#E12D1E]/5 p-4 text-[#E12D1E] font-mono text-[10px] uppercase tracking-[0.24em] flex items-center gap-3">
+                <span className="h-2 w-2 rounded-full bg-[#E12D1E] animate-pulse" />
+                <span>{captureStatus}</span>
               </div>
             )}
           </div>
 
-          <div className="flex justify-end gap-3">
-            <Link href="/" className="apple-button-secondary px-6 py-2.5 text-xs font-semibold">
-              Cancel
+          <div className="flex items-center justify-end gap-4">
+            <Link
+              href="/"
+              className="border border-[var(--oculus-hairline)] bg-transparent px-6 py-3.5 font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--oculus-ink)] hover:border-[var(--oculus-ink)] transition-colors"
+            >
+              ABORT
             </Link>
             <button
               type="button"
               onClick={handleWebRTCStart}
               disabled={isCapturing}
-              className="apple-button-primary px-8 py-2.5 text-xs font-bold inline-flex items-center gap-2"
+              className="border border-[var(--oculus-ink)] bg-[var(--oculus-ink)] px-8 py-3.5 font-mono text-[10px] uppercase tracking-[0.26em] text-[var(--oculus-bg)] transition-colors hover:bg-[var(--oculus-bg)] hover:text-[var(--oculus-ink)] disabled:opacity-50"
             >
-              {isCapturing ? "Capturing..." : "Select Tab & Start Sentinel →"}
+              {isCapturing ? "BUFFERING STREAM..." : "SELECT TAB & START SENTINEL →"}
             </button>
           </div>
         </div>
       )}
 
+      {/* Tab 3 Content: Attendee Bot Dispatch */}
       {activeTab === "attendee_bot" && (
         <form onSubmit={handleBotSubmit} className="space-y-6">
-          <div className="apple-card p-6 space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xs font-bold text-[var(--apple-text-secondary)] uppercase tracking-wider">
-                2. Meeting Target URL & Bot Config
-              </h2>
-              <span className="apple-badge text-[11px] bg-purple-500/10 text-purple-600 font-mono">
-                Attendee.dev Cloud
+          <div className="border border-[var(--oculus-hairline)] bg-[var(--oculus-surface)] p-6 sm:p-8 space-y-6">
+            <div className="flex items-center justify-between border-b border-[var(--oculus-hairline)] pb-4">
+              <div className="flex items-center gap-3">
+                <span className="font-mono text-[10px] uppercase tracking-[0.3em] text-[var(--oculus-muted)]">
+                  SEC. 02
+                </span>
+                <h2 className="font-display text-lg font-semibold tracking-[-0.02em] text-[var(--oculus-ink)]">
+                  ATTENDEE.DEV MEETING BOT DISPATCH
+                </h2>
+              </div>
+              <span className="font-mono text-[9px] uppercase tracking-[0.24em] text-[var(--oculus-muted)]">
+                HEADLESS CLOUD JOIN
               </span>
             </div>
 
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-[var(--apple-text-primary)]">
-                Meeting URL (Zoom / Google Meet / Teams) <span className="text-rose-500">*</span>
+            <div className="space-y-2">
+              <label className="block font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--oculus-muted)]">
+                Target Meeting Link (Zoom, Meet, or Teams) <span className="text-[#E12D1E]">*</span>
               </label>
               <input
                 type="url"
                 required
                 value={meetingUrl}
                 onChange={(e) => setMeetingUrl(e.target.value)}
-                className="w-full px-3.5 py-2.5 apple-input text-xs"
-                placeholder="https://zoom.us/j/9876543210?pwd=... or https://meet.google.com/abc-defg-hij"
+                className="w-full border border-[var(--oculus-hairline)] bg-[var(--oculus-bg)] px-4 py-3 font-mono text-[11px] tracking-[0.12em] text-[var(--oculus-ink)] placeholder:text-[var(--oculus-muted)] focus:border-[var(--oculus-ink)] focus:outline-none transition-colors"
+                placeholder="https://zoom.us/j/9876543210?pwd=... or https://meet.google.com/xyz-abcd-efg"
               />
             </div>
 
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-[var(--apple-text-primary)]">
-                Bot Display Name in Meeting
+            <div className="space-y-2">
+              <label className="block font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--oculus-muted)]">
+                Bot Participant Display Identity
               </label>
               <input
                 type="text"
                 value={botDisplayName}
                 onChange={(e) => setBotDisplayName(e.target.value)}
-                className="w-full px-3.5 py-2.5 apple-input text-xs"
-                placeholder="OCULUS Sentinel"
+                className="w-full border border-[var(--oculus-hairline)] bg-[var(--oculus-bg)] px-4 py-3 font-mono text-[11px] uppercase tracking-[0.16em] text-[var(--oculus-ink)] placeholder:text-[var(--oculus-muted)] focus:border-[var(--oculus-ink)] focus:outline-none transition-colors"
+                placeholder="OCULUS SENTINEL"
               />
             </div>
           </div>
 
-          <div className="flex justify-end gap-3">
-            <Link href="/" className="apple-button-secondary px-6 py-2.5 text-xs font-semibold">
-              Cancel
+          <div className="flex items-center justify-end gap-4">
+            <Link
+              href="/"
+              className="border border-[var(--oculus-hairline)] bg-transparent px-6 py-3.5 font-mono text-[10px] uppercase tracking-[0.24em] text-[var(--oculus-ink)] hover:border-[var(--oculus-ink)] transition-colors"
+            >
+              ABORT
             </Link>
             <button
               type="submit"
               disabled={isSubmitting}
-              className="apple-button-primary px-8 py-2.5 text-xs font-bold inline-flex items-center gap-2"
+              className="border border-[var(--oculus-ink)] bg-[var(--oculus-ink)] px-8 py-3.5 font-mono text-[10px] uppercase tracking-[0.26em] text-[var(--oculus-bg)] transition-colors hover:bg-[var(--oculus-bg)] hover:text-[var(--oculus-ink)] disabled:opacity-50"
             >
-              {isSubmitting ? "Dispatching Bot..." : "Dispatch Bot to Meeting →"}
+              {isSubmitting ? "TRANSMITTING DISPATCH..." : "DISPATCH BOT TO MEETING →"}
             </button>
           </div>
         </form>
@@ -487,7 +526,7 @@ function NewSessionContent() {
 
 export default function NewSessionPage() {
   return (
-    <Suspense fallback={<div className="p-12 text-center text-xs text-[var(--apple-text-secondary)]">Loading launcher...</div>}>
+    <Suspense fallback={<div className="p-16 text-center font-mono text-[10px] uppercase tracking-[0.3em] text-[var(--oculus-muted)]">LOADING DISPATCH PROTOCOL...</div>}>
       <NewSessionContent />
     </Suspense>
   );
