@@ -1,6 +1,6 @@
+import asyncio
 import os
 import uuid
-from typing import Dict, Any
 from fastapi import APIRouter, Request, HTTPException, UploadFile, File, Form, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,10 +14,17 @@ router = APIRouter(prefix="/api/v1", tags=["webhooks_and_demo"])
 attendee_adapter = AttendeeBotAdapter()
 demo_adapter = DemoFileAdapter()
 
+MAX_DEMO_UPLOAD_BYTES = 150 * 1024 * 1024
+UPLOAD_CHUNK_BYTES = 1024 * 1024
+
 
 @router.post("/webhooks/attendee")
 async def attendee_webhook(request: Request):
-    signature = request.headers.get("X-Attendee-Signature", "")
+    signature = (
+        request.headers.get("X-Attendee-Signature")
+        or request.headers.get("Attendee-Signature")
+        or ""
+    )
     raw_body = await request.body()
 
     if not attendee_adapter.verify_webhook_signature(signature, raw_body):
@@ -38,15 +45,30 @@ async def upload_demo_file(
 ):
     session_id = f"sess_demo_{uuid.uuid4().hex[:8]}"
 
-    # Save uploaded file locally
+    # Stream uploaded file safely in 1 MB chunks with a hard size guard
     upload_dir = os.path.join(settings.LOCAL_STORAGE_DIR, "uploads")
     os.makedirs(upload_dir, exist_ok=True)
-    file_ext = os.path.splitext(file.filename)[1] or ".mp4"
+    safe_name = os.path.basename(file.filename or "recording.mp4")
+    file_ext = os.path.splitext(safe_name)[1].lower() or ".mp4"
     dest_path = os.path.join(upload_dir, f"{session_id}{file_ext}")
 
-    content = await file.read()
-    with open(dest_path, "wb") as f:
-        f.write(content)
+    total_bytes = 0
+    try:
+        with open(dest_path, "wb") as f:
+            while True:
+                chunk = await file.read(UPLOAD_CHUNK_BYTES)
+                if not chunk:
+                    break
+                total_bytes += len(chunk)
+                if total_bytes > MAX_DEMO_UPLOAD_BYTES:
+                    raise HTTPException(status_code=413, detail="Uploaded recording exceeds 150 MB limit.")
+                await asyncio.to_thread(f.write, chunk)
+    except HTTPException:
+        if os.path.exists(dest_path):
+            os.remove(dest_path)
+        raise
+    finally:
+        await file.close()
 
     custom_vocab = extract_custom_vocab(job_title, job_description)
 
