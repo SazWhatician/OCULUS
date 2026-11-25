@@ -4,6 +4,7 @@ import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { createSession, uploadDemoFile, WS_BASE_URL } from "@/lib/api";
+import { webrtcCapture } from "@/lib/webrtcCapture";
 
 function NewSessionContent() {
   const router = useRouter();
@@ -84,46 +85,12 @@ function NewSessionContent() {
         ingestion_mode: "browser_webrtc",
       });
 
-      setCaptureStatus("REQUESTING BROWSER SCREEN/TAB MEDIA STREAM...");
-
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { displaySurface: "browser" },
-        audio: true,
-      });
-
-      setCaptureStatus("CONNECTING TO OCULUS INGESTION WEBSOCKET...");
-      const wsUrl = `${WS_BASE_URL}/ws/ingest/${session.session_id}`;
-      const ws = new WebSocket(wsUrl);
-
-      ws.onopen = () => {
-        setCaptureStatus("SENTINEL LINK ESTABLISHED · STREAMING CHUNKS");
-
-        const mediaRecorder = new MediaRecorder(stream, { mimeType: "video/webm; codecs=vp8,opus" });
-        mediaRecorder.ondataavailable = async (event) => {
-          if (event.data.size > 0 && ws.readyState === WebSocket.OPEN) {
-            const buffer = await event.data.arrayBuffer();
-            ws.send(buffer);
-          }
-        };
-
-        mediaRecorder.start(5000);
-
-        stream.getVideoTracks()[0].onended = () => {
-          mediaRecorder.stop();
-          ws.close();
-          router.push(`/sessions/${session.session_id}`);
-        };
-
-        setTimeout(() => {
-          router.push(`/sessions/${session.session_id}`);
-        }, 1200);
-      };
-
-      ws.onerror = () => {
-        setCaptureStatus("WEBSOCKET STREAM ERROR — REVERTING");
-        setIsCapturing(false);
-      };
+      setCaptureStatus("REQUESTING BROWSER SCREEN/TAB STREAM & LINKING SENTINEL...");
+      await webrtcCapture.start(session.session_id, WS_BASE_URL);
+      setCaptureStatus("SENTINEL LINK ESTABLISHED · REDIRECTING TO LIVE MONITOR");
+      router.push(`/sessions/${session.session_id}`);
     } catch (err: any) {
+      await webrtcCapture.stop();
       alert(`Capture failed: ${err.message}`);
       setIsCapturing(false);
       setCaptureStatus(null);
