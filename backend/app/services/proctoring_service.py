@@ -22,11 +22,15 @@ from app.schemas.contracts import (
     HeuristicScores,
     LLMJudgeVerdict,
 )
+from app.services.aggregator import (
+    compute_anti_dilution_session_risk,
+    compute_vision_boost,
+)
 from app.services.heuristics import (
     compute_candidate_baseline,
     compute_deterministic_heuristics,
 )
-from app.services.vision_proctoring import get_vision_service
+from app.services.vision_proctoring import CATEGORY_TO_ANOMALY_TYPE, get_vision_service
 
 logger = logging.getLogger("oculus.proctoring.service")
 
@@ -90,15 +94,7 @@ SELF_REFS = frozenset({
 
 # Maps vision_proctoring.py category strings to heuristics.py canonical VisionAnomalyType names
 VISION_CATEGORY_TO_HEURISTIC_TYPE: Dict[str, str] = {
-    "Phone / Device Detected": "DEVICE_DETECTED",
-    "Multi-Face Detection": "MULTI_FACE",
-    "Liveness / Spoof Risk": "DEVICE_DETECTED",
-    "Frozen Video Feed": "GAZE_DEVIATION",
-    "Gaze Deviation (Looking Away)": "GAZE_DEVIATION",
-    "Teleprompter Reading Pattern": "GAZE_DEVIATION",
-    "Head Pose Shift": "HEAD_PITCH_DOWN",
-    "Camera Occlusion": "GAZE_DEVIATION",
-    "Face Absent From Frame": "GAZE_DEVIATION",
+    category: anomaly_type.value for category, anomaly_type in CATEGORY_TO_ANOMALY_TYPE.items()
 }
 
 
@@ -638,8 +634,9 @@ class ProctoringService:
         elapsed_ms: int,
     ) -> ProctoringReport:
         per_answer: List[AnswerProctoring] = []
-        substantive_turns: List[Tuple[float, int]] = []  # (risk_0_100, word_count)
+        turn_metrics: List[Tuple[float, int, bool, bool]] = []  # (risk_0_100, word_count, is_intro, force_include)
         advisory_probes: List[str] = []
+        only_turn = len(qa_pairs) == 1
 
         for i, (qa, feats, h) in enumerate(zip(qa_pairs, legacy_features, stage1_scores)):
             question = str(qa.get("question") or "")
@@ -691,32 +688,17 @@ class ProctoringService:
                 )
             )
 
-            # Collect substantive technical/behavioral turns for anti-dilution scoring
-            if (
-                i not in intro_indices
-                and feats["word_count"] >= MIN_WORDS_FOR_SUBSTANTIVE_AGG
-            ) or injection_hits:
-                substantive_turns.append((fused_risk, feats["word_count"]))
+            has_hard_vision = any(
+                ev.anomaly_type in ("DEVICE_DETECTED", "PHONE_DETECTED", "MULTI_FACE", "LIVENESS_SPOOF")
+                for ev in vision_links
+            )
+            turn_metrics.append(
+                (fused_risk, feats["word_count"], (i in intro_indices) and not only_turn, bool(injection_hits or has_hard_vision))
+            )
 
-        # Fallback if interview only contained short turns or intros
-        if not substantive_turns:
-            substantive_turns = [
-                (round(a.score * 100.0, 1), max(f["word_count"], 1))
-                for a, f in zip(per_answer, legacy_features)
-            ]
-
-        # Anti-Dilution Aggregation: blends length-weighted average with top-2 highest-risk turns
-        total_weight = sum(min(wc, 250) for _, wc in substantive_turns)
-        weighted_mean = (
-            sum(risk * min(wc, 250) for risk, wc in substantive_turns) / max(total_weight, 1)
-        )
-        top_risks = sorted((risk for risk, _ in substantive_turns), reverse=True)[:2]
-        top_k_mean = statistics.fmean(top_risks)
-        text_session_risk = (0.45 * weighted_mean) + (0.55 * top_k_mean)
-
-        # Multimodal Vision Fusion (adds bounded risk from confirmed high-severity visual telemetry)
+        # Shared Anti-Dilution Aggregation + Multimodal Vision Fusion
         vision_risk_boost, vision_risk_index = self._compute_vision_fusion_boost(vision_summary)
-        overall_risk = round(min(100.0, max(0.0, text_session_risk + vision_risk_boost)), 1)
+        overall_risk = compute_anti_dilution_session_risk(turn_metrics, vision_boost=vision_risk_boost)
         overall_score = round(overall_risk / 100.0, 3)
         overall_band = self._risk_band(overall_risk)
 
@@ -908,15 +890,13 @@ class ProctoringService:
         teleprompter_n = int(vision_summary.get("teleprompter_scan_events_count") or 0)
         gaze_n = int(vision_summary.get("gaze_deviation_events_count") or 0)
 
-        # Hard visual signals elevate session risk; gaze alone stays conservative
-        boost = (
-            min(phone_n * 14.0, 20.0)
-            + min(multi_n * 10.0, 15.0)
-            + min(liveness_n * 12.0, 18.0)
-            + min(teleprompter_n * 6.0, 12.0)
-            + min(max(0, gaze_n - 1) * 2.0, 6.0)
+        capped_boost = compute_vision_boost(
+            phone_count=phone_n,
+            multi_face_count=multi_n,
+            liveness_count=liveness_n,
+            teleprompter_count=teleprompter_n,
+            gaze_count=gaze_n,
         )
-        capped_boost = round(min(boost, 25.0), 1)
         visual_attention = vision_summary.get("visual_attention_score")
         vision_risk_index = round(100.0 - float(visual_attention), 1) if visual_attention is not None else 0.0
         return (capped_boost, max(0.0, min(100.0, vision_risk_index)))
