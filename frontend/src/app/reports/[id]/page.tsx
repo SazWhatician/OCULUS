@@ -54,10 +54,13 @@ interface IntegrityReportData {
   advisory_disclaimer: string;
   baseline?: {
     session_id: string;
-    median_wpm: number;
-    mad_wpm: number;
-    baseline_disfluency_rate: number;
-    baseline_pause_ratio: number;
+    median_wpm?: number;
+    baseline_wpm?: number;
+    wpm_mad?: number;
+    mad_wpm?: number;
+    disfluency_rate?: number;
+    baseline_disfluency_rate?: number;
+    baseline_pause_ratio?: number;
   } | null;
   qa_evaluations: QAEvaluation[];
   vision_timeline: VisionAnomaly[];
@@ -236,7 +239,7 @@ export default function ReportDetailPage({ params }: { params: Promise<{ id: str
                   MEDIAN CADENCE
                 </span>
                 <span className="font-display text-2xl font-semibold text-[var(--oculus-ink)] tabular-nums">
-                  {Math.round(report.baseline.median_wpm)}
+                  {Math.round(report.baseline.baseline_wpm ?? report.baseline.median_wpm ?? 0)}
                 </span>
                 <span className="font-mono text-[9px] text-[var(--oculus-muted)] block uppercase">WPM NOMINAL</span>
               </div>
@@ -246,7 +249,7 @@ export default function ReportDetailPage({ params }: { params: Promise<{ id: str
                   MAD VARIANCE
                 </span>
                 <span className="font-display text-2xl font-semibold text-[var(--oculus-ink)] tabular-nums">
-                  {report.baseline.mad_wpm.toFixed(1)}
+                  {(report.baseline.mad_wpm ?? report.baseline.wpm_mad ?? 0).toFixed(1)}
                 </span>
                 <span className="font-mono text-[9px] text-[var(--oculus-muted)] block uppercase">σ DISPERSION</span>
               </div>
@@ -256,7 +259,7 @@ export default function ReportDetailPage({ params }: { params: Promise<{ id: str
                   DISFLUENCY RATIO
                 </span>
                 <span className="font-display text-2xl font-semibold text-[var(--oculus-ink)] tabular-nums">
-                  {report.baseline.baseline_disfluency_rate.toFixed(1)}%
+                  {(report.baseline.baseline_disfluency_rate ?? report.baseline.disfluency_rate ?? 0).toFixed(1)}%
                 </span>
                 <span className="font-mono text-[9px] text-[var(--oculus-muted)] block uppercase">NATURAL HESITATION</span>
               </div>
@@ -266,7 +269,7 @@ export default function ReportDetailPage({ params }: { params: Promise<{ id: str
                   PAUSE RATIO
                 </span>
                 <span className="font-display text-2xl font-semibold text-[var(--oculus-ink)] tabular-nums">
-                  {Math.round(report.baseline.baseline_pause_ratio * 100)}%
+                  {Math.round((report.baseline.baseline_pause_ratio ?? 0) * 100)}%
                 </span>
                 <span className="font-mono text-[9px] text-[var(--oculus-muted)] block uppercase">COGNITIVE LATENCY</span>
               </div>
