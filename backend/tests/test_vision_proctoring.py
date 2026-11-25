@@ -32,5 +32,37 @@ def test_vision_telemetry():
     assert summary["gaze_consistency_pct"] > 0.0
     print("[PASS] Vision Proctoring Test Passed!")
 
+
+def test_off_center_camera_calibration_no_false_positives():
+    svc = get_vision_service()
+    session_id = "test_offcenter_cal_session"
+    svc.clear_session(session_id)
+
+    # 15 resting frames with off-center webcam (-0.18, raw label "left") lock baseline
+    for i in range(15):
+        svc.ingest_frame_all(
+            VisionTelemetryFrame(
+                session_id=session_id,
+                timestamp_ms=1_000 + i * 500,
+                gaze_direction="left",
+                gaze_offset_x=-0.18,
+            )
+        )
+
+    # Subsequent frames near the calibrated resting offset emit 0 gaze deviations
+    for j in range(10):
+        svc.ingest_frame_all(
+            VisionTelemetryFrame(
+                session_id=session_id,
+                timestamp_ms=9_000 + j * 500,
+                gaze_direction="left",
+                gaze_offset_x=-0.19,
+            )
+        )
+
+    summary = svc.get_session_summary(session_id)
+    assert summary["calibration_complete"] is True
+    assert summary["gaze_deviation_events_count"] == 0
+
 if __name__ == "__main__":
     test_vision_telemetry()
