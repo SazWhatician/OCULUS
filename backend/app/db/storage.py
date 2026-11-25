@@ -23,6 +23,16 @@ class StorageAdapter(ABC):
         pass
 
 
+def resolve_local_storage_path(key: str, base_dir: Optional[str] = None) -> str:
+    """Safely resolves a storage key beneath base_dir using canonical path containment."""
+    root = os.path.realpath(base_dir or settings.LOCAL_STORAGE_DIR)
+    rel = key.replace("\\", "/").lstrip("/")
+    candidate = os.path.realpath(os.path.join(root, rel))
+    if os.path.commonpath([root, candidate]) != root or candidate == root:
+        raise ValueError(f"Invalid storage key path: {key}")
+    return candidate
+
+
 class LocalDiskStorageAdapter(StorageAdapter):
     """
     Zero-cost local filesystem storage adapter for development and demo mode.
@@ -34,29 +44,35 @@ class LocalDiskStorageAdapter(StorageAdapter):
         os.makedirs(self.base_dir, exist_ok=True)
 
     def _get_path(self, key: str) -> str:
-        safe_key = key.replace("\\", "/").strip("/").replace("..", "_")
-        full_path = os.path.join(self.base_dir, safe_key)
+        full_path = resolve_local_storage_path(key, self.base_dir)
         os.makedirs(os.path.dirname(full_path), exist_ok=True)
         return full_path
 
     async def put_bytes(self, key: str, data: bytes, content_type: str = "application/octet-stream") -> str:
+        import asyncio
         path = self._get_path(key)
-        with open(path, "wb") as f:
-            f.write(data)
+        def _write() -> None:
+            with open(path, "wb") as f:
+                f.write(data)
+        await asyncio.to_thread(_write)
         return key
 
     async def get_bytes(self, key: str) -> bytes:
+        import asyncio
         path = self._get_path(key)
         if not os.path.exists(path):
             raise FileNotFoundError(f"Key {key} not found in local storage.")
-        with open(path, "rb") as f:
-            return f.read()
+        def _read() -> bytes:
+            with open(path, "rb") as f:
+                return f.read()
+        return await asyncio.to_thread(_read)
 
     async def delete(self, key: str) -> bool:
+        import asyncio
         path = self._get_path(key)
         if os.path.exists(path):
             try:
-                os.remove(path)
+                await asyncio.to_thread(os.remove, path)
                 return True
             except OSError:
                 return False
