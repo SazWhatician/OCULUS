@@ -30,6 +30,8 @@ class VisionAnomalyType(str, Enum):
     HEAD_PITCH_DOWN = "HEAD_PITCH_DOWN"
     MULTI_FACE = "MULTI_FACE"
     DEVICE_DETECTED = "DEVICE_DETECTED"
+    LIVENESS_SPOOF = "LIVENESS_SPOOF"
+    CAMERA_OCCLUSION = "CAMERA_OCCLUSION"
 
 
 class RiskBand(str, Enum):
@@ -53,6 +55,7 @@ class AudioChunkEvent(BaseModel):
     speaker_hint: SpeakerRole = SpeakerRole.UNKNOWN
     storage_key: str
     is_mixed_audio: bool = True
+    is_final: bool = False
 
     def model_post_init(self, __context) -> None:
         if not self.idempotency_key:
