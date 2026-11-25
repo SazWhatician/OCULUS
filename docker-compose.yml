@@ -42,6 +42,23 @@ services:
       - ./backend/tmp_storage:/app/tmp_storage
     restart: unless-stopped
 
+  sentinel_frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+        NEXT_PUBLIC_WS_URL: ws://localhost:8000
+    container_name: oculus_sentinel_frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_WS_URL=ws://localhost:8000
+    depends_on:
+      - sentinel_api
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   redis_data:
