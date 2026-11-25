@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { fetchSession, swapSpeakers, completeSession, WS_BASE_URL, SessionDetail } from "@/lib/api";
+import { webrtcCapture, CaptureTelemetry } from "@/lib/webrtcCapture";
 
 interface UtteranceItem {
   utterance_id: string;
@@ -67,8 +68,18 @@ export default function LiveSentinelPage() {
   const [filterSpeaker, setFilterSpeaker] = useState<"ALL" | "candidate" | "interviewer">("ALL");
   const [wsConnected, setWsConnected] = useState<boolean>(false);
   const [endingSession, setEndingSession] = useState<boolean>(false);
+  const [captureTelemetry, setCaptureTelemetry] = useState<CaptureTelemetry>(() => webrtcCapture.getState());
 
   const transcriptEndRef = useRef<HTMLDivElement>(null);
+  const previewVideoRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    return webrtcCapture.subscribe((snap) => setCaptureTelemetry(snap));
+  }, []);
+
+  useEffect(() => {
+    webrtcCapture.attachPreview(previewVideoRef.current);
+  }, [captureTelemetry.active, captureTelemetry.sessionId]);
 
   // Auto-scroll transcript on new utterance
   useEffect(() => {
@@ -84,6 +95,9 @@ export default function LiveSentinelPage() {
         setStatus(data.status);
         if (data.speaker_role_map) setSpeakerMap(data.speaker_role_map);
         if (data.baseline) setBaseline(data.baseline);
+        if (Array.isArray(data.utterances)) setUtterances(data.utterances);
+        if (Array.isArray(data.qa_evaluations)) setQaEvaluations(data.qa_evaluations);
+        if (Array.isArray(data.vision_events)) setVisionEvents(data.vision_events);
         if (data.report) {
           setRiskScore(data.report.overall_risk_score || 0);
           setRiskBand(data.report.risk_band || "LOW");
@@ -111,27 +125,69 @@ export default function LiveSentinelPage() {
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
-        const { event_type, payload } = msg;
+        const eventType = String(msg.event_type || "").toUpperCase();
+        const data = msg.data ?? msg.payload ?? msg;
 
-        if (event_type === "utterance") {
-          setUtterances((prev) => [...prev, payload]);
-        } else if (event_type === "qa_evaluated") {
-          setQaEvaluations((prev) => {
-            const exists = prev.some((q) => q.qa_index === payload.qa_index);
-            if (exists) {
-              return prev.map((q) => (q.qa_index === payload.qa_index ? payload : q));
-            }
-            return [...prev, payload];
+        if (eventType === "PING") {
+          return;
+        } else if (eventType === "HYDRATE_STATE") {
+          if (data?.status) setStatus(data.status);
+          if (Array.isArray(data?.utterances)) setUtterances(data.utterances);
+          if (Array.isArray(data?.qa_evaluations)) setQaEvaluations(data.qa_evaluations);
+          if (Array.isArray(data?.vision_events)) setVisionEvents(data.vision_events);
+          if (data?.baseline) setBaseline(data.baseline);
+          if (typeof data?.overall_risk_score === "number") setRiskScore(data.overall_risk_score);
+          if (data?.risk_band) setRiskBand(data.risk_band);
+        } else if (eventType === "UTTERANCE" && data) {
+          setUtterances((prev) => {
+            const exists = prev.some((u) => u.utterance_id === data.utterance_id);
+            return exists
+              ? prev.map((u) => (u.utterance_id === data.utterance_id ? data : u))
+              : [...prev, data];
           });
-        } else if (event_type === "risk_update") {
-          setRiskScore(payload.overall_risk_score || 0);
-          setRiskBand(payload.risk_band || "LOW");
-        } else if (event_type === "baseline_calibrated") {
-          setBaseline(payload);
-        } else if (event_type === "vision_anomaly") {
-          setVisionEvents((prev) => [...prev, payload]);
-        } else if (event_type === "status_change") {
-          setStatus(payload.status);
+        } else if (eventType === "QA_EVALUATED" && data) {
+          const qaItem = data.qa_evaluation ?? data;
+          if (qaItem && typeof qaItem.qa_index === "number") {
+            setQaEvaluations((prev) => {
+              const exists = prev.some((q) => q.qa_index === qaItem.qa_index);
+              return exists
+                ? prev.map((q) => (q.qa_index === qaItem.qa_index ? qaItem : q))
+                : [...prev, qaItem];
+            });
+          }
+          if (typeof data.overall_risk_score === "number") setRiskScore(data.overall_risk_score);
+          if (data.risk_band) setRiskBand(data.risk_band);
+          if (data.baseline_calibrated) {
+            fetchSession(sessionId).then((fresh) => {
+              if (fresh?.baseline) setBaseline(fresh.baseline);
+            });
+          }
+        } else if (eventType === "RISK_UPDATE" && data) {
+          setRiskScore(data.overall_risk_score || 0);
+          setRiskBand(data.risk_band || "LOW");
+        } else if (eventType === "BASELINE_CALIBRATED" && data) {
+          setBaseline(data);
+        } else if (eventType === "VISION_ANOMALY" && data) {
+          setVisionEvents((prev) => {
+            const exists = prev.some((v) => v.event_id === data.event_id);
+            return exists ? prev : [...prev, data];
+          });
+        } else if (eventType === "SPEAKER_MAP_UPDATED") {
+          if (data?.speaker_role_map) setSpeakerMap(data.speaker_role_map);
+          fetchSession(sessionId).then((fresh) => {
+            if (!fresh) return;
+            if (Array.isArray(fresh.utterances)) setUtterances(fresh.utterances);
+            if (Array.isArray(fresh.qa_evaluations)) setQaEvaluations(fresh.qa_evaluations);
+            if (fresh.baseline) setBaseline(fresh.baseline);
+            if (fresh.report) {
+              setRiskScore(fresh.report.overall_risk_score || 0);
+              setRiskBand(fresh.report.risk_band || "LOW");
+            }
+          });
+        } else if (eventType === "STATUS_UPDATE" || eventType === "STATUS_CHANGE") {
+          if (data?.status) setStatus(data.status);
+          if (typeof data?.overall_risk_score === "number") setRiskScore(data.overall_risk_score);
+          if (data?.risk_band) setRiskBand(data.risk_band);
         }
       } catch (err) {
         console.error("WS Parse Error:", err);
@@ -169,6 +225,10 @@ export default function LiveSentinelPage() {
     if (!confirm("Are you sure you want to conclude monitoring and compile the final Audit Report?")) return;
     setEndingSession(true);
     try {
+      if (captureTelemetry.active && captureTelemetry.sessionId === sessionId) {
+        await webrtcCapture.stop();
+        await new Promise((r) => setTimeout(r, 150));
+      }
       await completeSession(sessionId);
       setStatus("COMPLETED");
       router.push(`/reports/${sessionId}`);
@@ -178,6 +238,20 @@ export default function LiveSentinelPage() {
       setEndingSession(false);
     }
   };
+
+  const isThisSessionStreaming = captureTelemetry.active && captureTelemetry.sessionId === sessionId;
+  const hasVisionActivity =
+    (isThisSessionStreaming && captureTelemetry.framesSent > 0) || visionEvents.length > 0 || status === "COMPLETED";
+  const latestVisionFlag = visionEvents[visionEvents.length - 1];
+  const latestGazeFlag = [...visionEvents]
+    .reverse()
+    .find((v) => v.anomaly_type === "GAZE_DEVIATION" || v.anomaly_type === "TELEPROMPTER_READING");
+  const latestPoseFlag = [...visionEvents]
+    .reverse()
+    .find((v) => v.anomaly_type === "HEAD_PITCH_DOWN" || v.anomaly_type === "CAMERA_OCCLUSION");
+  const latestSubjectFlag = [...visionEvents]
+    .reverse()
+    .find((v) => v.anomaly_type === "MULTI_FACE" || v.anomaly_type === "ABSENT_FACE" || v.anomaly_type === "LIVENESS_SPOOF");
 
   const filteredUtterances = utterances.filter((u) => {
     if (filterSpeaker === "ALL") return true;
@@ -544,42 +618,114 @@ export default function LiveSentinelPage() {
 
             {/* Video Reticle Preview Frame */}
             <div className="w-full h-44 bg-[var(--oculus-bg)] border border-[var(--oculus-hairline)] flex flex-col items-center justify-center relative overflow-hidden">
+              {isThisSessionStreaming && captureTelemetry.videoActive && (
+                <video
+                  ref={previewVideoRef}
+                  autoPlay
+                  muted
+                  playsInline
+                  className="absolute inset-0 w-full h-full object-cover opacity-80"
+                />
+              )}
+
               {/* Reticle lines */}
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-20">
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-25">
                 <div className="w-24 h-24 border border-current rounded-full" />
                 <div className="absolute h-full w-px bg-current" />
                 <div className="absolute w-full h-px bg-current" />
               </div>
 
-              <div className="absolute top-3 left-3 flex items-center gap-2 border border-[var(--oculus-hairline)] bg-[var(--oculus-surface)] px-2 py-1 font-mono text-[9px] uppercase tracking-[0.22em] text-[var(--oculus-ink)]">
-                <span className="h-1.5 w-1.5 rounded-full bg-[#10B981] animate-pulse" />
-                <span>TRACKING NOMINAL</span>
+              <div className="absolute top-3 left-3 flex items-center gap-2 border border-[var(--oculus-hairline)] bg-[var(--oculus-surface)]/95 px-2 py-1 font-mono text-[9px] uppercase tracking-[0.22em] text-[var(--oculus-ink)]">
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${
+                    latestVisionFlag
+                      ? "bg-[#E12D1E] animate-pulse"
+                      : isThisSessionStreaming
+                      ? "bg-[#10B981] animate-pulse"
+                      : "bg-[var(--oculus-muted)]"
+                  }`}
+                />
+                <span>
+                  {latestVisionFlag
+                    ? `FLAGGED: ${latestVisionFlag.anomaly_type}`
+                    : isThisSessionStreaming
+                    ? `STREAMING · ${captureTelemetry.framesSent}F / ${captureTelemetry.chunksSent}A`
+                    : status === "COMPLETED"
+                    ? "MONITORING CONCLUDED"
+                    : session?.ingestion_mode === "demo_file"
+                    ? "REPLAY PIPELINE"
+                    : "AWAITING VIDEO STREAM"}
+                </span>
               </div>
 
-              <div className="text-center space-y-1 font-mono">
-                <span className="text-2xl text-[var(--oculus-ink)] opacity-60">◎</span>
-                <span className="text-[10.5px] uppercase tracking-[0.22em] font-semibold text-[var(--oculus-ink)] block">
-                  OPENCV OPTICAL GAZE TRACKER
-                </span>
-                <span className="text-[9px] uppercase tracking-[0.18em] text-[var(--oculus-muted)] block">
-                  3-TIER FUNNEL // CPU OPTIMIZED
-                </span>
-              </div>
+              {session?.ingestion_mode === "browser_webrtc" && status !== "COMPLETED" && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isThisSessionStreaming) {
+                      void webrtcCapture.stop();
+                    } else {
+                      void webrtcCapture.start(sessionId, WS_BASE_URL).catch((err) => alert(err.message));
+                    }
+                  }}
+                  className="absolute bottom-3 right-3 border border-[var(--oculus-hairline)] bg-[var(--oculus-surface)]/95 hover:bg-[var(--oculus-ink)] hover:text-[var(--oculus-bg)] px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.2em] transition-colors cursor-pointer"
+                >
+                  {isThisSessionStreaming ? "STOP CAPTURE" : "START CAPTURE"}
+                </button>
+              )}
+
+              {!(isThisSessionStreaming && captureTelemetry.videoActive) && (
+                <div className="text-center space-y-1 font-mono">
+                  <span className="text-2xl text-[var(--oculus-ink)] opacity-60">◎</span>
+                  <span className="text-[10.5px] uppercase tracking-[0.22em] font-semibold text-[var(--oculus-ink)] block">
+                    OPENCV OPTICAL GAZE TRACKER
+                  </span>
+                  <span className="text-[9px] uppercase tracking-[0.18em] text-[var(--oculus-muted)] block">
+                    3-TIER FUNNEL // CPU OPTIMIZED
+                  </span>
+                </div>
+              )}
             </div>
 
             {/* Vision Telemetry Status Indicators */}
             <div className="grid grid-cols-3 gap-2 text-center font-mono text-[9.5px]">
               <div className="p-2.5 border border-[var(--oculus-hairline)] bg-[var(--oculus-bg)]">
                 <span className="text-[var(--oculus-muted)] uppercase tracking-[0.16em] block">GAZE OFFSET</span>
-                <span className="font-bold text-[var(--oculus-ink)] mt-0.5 block">CENTER (±2°)</span>
+                <span className={`font-bold mt-0.5 block ${latestGazeFlag ? "text-[#E12D1E]" : "text-[var(--oculus-ink)]"}`}>
+                  {latestGazeFlag
+                    ? latestGazeFlag.anomaly_type === "TELEPROMPTER_READING"
+                      ? "SCRIPT SCAN"
+                      : "OFF-AXIS"
+                    : hasVisionActivity
+                    ? "CENTERED"
+                    : "IDLE"}
+                </span>
               </div>
               <div className="p-2.5 border border-[var(--oculus-hairline)] bg-[var(--oculus-bg)]">
                 <span className="text-[var(--oculus-muted)] uppercase tracking-[0.16em] block">HEAD POSE</span>
-                <span className="font-bold text-[var(--oculus-ink)] mt-0.5 block">NOMINAL</span>
+                <span className={`font-bold mt-0.5 block ${latestPoseFlag ? "text-[#E12D1E]" : "text-[var(--oculus-ink)]"}`}>
+                  {latestPoseFlag
+                    ? latestPoseFlag.anomaly_type === "CAMERA_OCCLUSION"
+                      ? "OCCLUDED"
+                      : "PITCH SHIFT"
+                    : hasVisionActivity
+                    ? "ALIGNED"
+                    : "IDLE"}
+                </span>
               </div>
               <div className="p-2.5 border border-[var(--oculus-hairline)] bg-[var(--oculus-bg)]">
                 <span className="text-[var(--oculus-muted)] uppercase tracking-[0.16em] block">SUBJECT COUNT</span>
-                <span className="font-bold text-[var(--oculus-ink)] mt-0.5 block">1 FACE</span>
+                <span className={`font-bold mt-0.5 block ${latestSubjectFlag ? "text-[#E12D1E]" : "text-[var(--oculus-ink)]"}`}>
+                  {latestSubjectFlag
+                    ? latestSubjectFlag.anomaly_type === "MULTI_FACE"
+                      ? "MULTI-FACE"
+                      : latestSubjectFlag.anomaly_type === "ABSENT_FACE"
+                      ? "0 FACES"
+                      : "SPOOF RISK"
+                    : hasVisionActivity
+                    ? "1 FACE"
+                    : "IDLE"}
+                </span>
               </div>
             </div>
 
