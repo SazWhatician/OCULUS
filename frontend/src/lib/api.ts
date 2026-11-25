@@ -22,11 +22,18 @@ export interface SessionDetail extends SessionItem {
   custom_vocab?: string[];
   speaker_role_map?: Record<string, string>;
   baseline?: {
-    median_wpm: number;
-    mad_wpm: number;
-    baseline_disfluency_rate: number;
-    baseline_pause_ratio: number;
+    session_id?: string;
+    median_wpm?: number;
+    baseline_wpm?: number;
+    mad_wpm?: number;
+    wpm_mad?: number;
+    baseline_disfluency_rate?: number;
+    disfluency_rate?: number;
+    baseline_pause_ratio?: number;
   } | null;
+  utterances?: any[];
+  qa_evaluations?: any[];
+  vision_events?: any[];
   report?: any;
 }
 
