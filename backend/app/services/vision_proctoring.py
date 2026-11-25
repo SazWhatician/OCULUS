@@ -6,7 +6,9 @@ from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from app.schemas.contracts import VisionAnomalyType
 
 logger = logging.getLogger("oculus.vision.proctoring")
 
@@ -17,18 +19,26 @@ MAX_ACTIVE_SESSIONS = 500
 FRAME_RING_BUFFER_SIZE = 180          # ~90-180s rolling window per session (prevents OOM)
 MAX_STORED_EVENTS_PER_SESSION = 500
 
-# Temporal persistence requirements (true wall-clock milliseconds, FPS-independent)
-STREAK_GAP_TOLERANCE_MS = 1_800       # Bridges transient 1-frame MediaPipe/WebRTC drops
-GAZE_PERSISTENCE_MS = 3_000           # Sustained off-screen gaze required (>= 3s)
-HEAD_POSE_PERSISTENCE_MS = 3_000      # Sustained head turn required (>= 3s)
-CAMERA_OFF_PERSISTENCE_MS = 2_000     # Ignores brief WebRTC reconnect flickers
-FACE_ABSENT_PERSISTENCE_MS = 3_000    # Candidate left frame or covered lens
-MULTI_FACE_PERSISTENCE_MS = 1_500     # Filters 1-frame background false positives
-DEVICE_PERSISTENCE_MS = 600           # Requires >=2 frames or 600ms (filters YOLO flicker)
-LIVENESS_PERSISTENCE_MS = 2_000       # Sustained virtual-camera / photo-spoof signal
-FROZEN_FEED_PERSISTENCE_MS = 6_000    # Identical non-zero pose frozen across >=6s
+# Temporal persistence requirements (wall-clock milliseconds, FPS-independent)
+STREAK_GAP_TOLERANCE_MS = 1_800
+GAZE_PERSISTENCE_MS = 3_000
+SPLIT_ANGLE_PERSISTENCE_MS = 2_600    # Slightly faster trigger when head + eyes compound
+HEAD_POSE_PERSISTENCE_MS = 3_000
+CAMERA_OFF_PERSISTENCE_MS = 2_000
+FACE_ABSENT_PERSISTENCE_MS = 3_000
+MULTI_FACE_PERSISTENCE_MS = 1_500
+DEVICE_PERSISTENCE_MS = 600
+LIVENESS_PERSISTENCE_MS = 2_000
+FROZEN_FEED_PERSISTENCE_MS = 6_000
 
-# Per-category cooldowns (prevents low-severity alerts from masking critical ones)
+# Peek-loop (anti-debouncer evasion) sliding window
+PEEK_WINDOW_MS = 20_000
+PEEK_MIN_SPAN_MS = 12_000
+PEEK_MIN_FRAMES = 8
+PEEK_MIN_TRANSITIONS = 3
+PEEK_MIN_OFFSCREEN_RATIO = 0.40
+
+# Per-category cooldowns (low-severity alerts never mask critical ones)
 CATEGORY_COOLDOWNS_MS: Dict[str, int] = {
     "Phone / Device Detected": 8_000,
     "Multi-Face Detection": 8_000,
@@ -37,21 +47,32 @@ CATEGORY_COOLDOWNS_MS: Dict[str, int] = {
     "Camera Occlusion": 10_000,
     "Face Absent From Frame": 10_000,
     "Gaze Deviation (Looking Away)": 6_000,
+    "Split-Angle Off-Screen Focus": 7_000,
+    "Repetitive Off-Screen Peek Pattern": 15_000,
     "Teleprompter Reading Pattern": 12_000,
     "Head Pose Shift": 8_000,
 }
 
 SEVERITY_RANK: Dict[str, int] = {"info": 0, "low": 1, "medium": 2, "high": 3}
 
-# Calibrated deviation limits
-CALIBRATION_TARGET_FRAMES = 15        # First ~10-15s of active valid frames establish baseline
-MAX_BASELINE_GAZE_OFFSET = 0.22       # Caps baseline shift so extreme side-setups can't hide cheating
-MAX_BASELINE_POSE_OFFSET = 14.0       # Caps yaw/pitch resting compensation in degrees
+# Calibrated deviation & anti-poisoning limits
+CALIBRATION_TARGET_FRAMES = 15
+CALIBRATION_MAX_BUFFER = 45           # Safety cap if early frames are turbulent
+CALIBRATION_MAX_GAZE_MAD = 0.14       # Rejects fidgeting/peeking during startup lock
+MAX_BASELINE_GAZE_OFFSET = 0.22
+MAX_BASELINE_POSE_OFFSET = 14.0
+BASELINE_DRIFT_ALPHA = 0.015          # Ultra-slow adaptation ONLY on strictly centered frames
+
 GAZE_X_DELTA_THRESHOLD = 0.34
 GAZE_Y_DOWN_DELTA_THRESHOLD = 0.30
 HEAD_YAW_DELTA_THRESHOLD = 22.0
 HEAD_PITCH_DELTA_THRESHOLD = 20.0
+EYE_OFFSET_TO_DEGREES = 35.0          # Approx eye-in-head visual angle scaling
+SPLIT_ANGLE_YAW_DEG_THRESHOLD = 25.0
+SPLIT_ANGLE_PITCH_DEG_THRESHOLD = 22.0
+
 LIVENESS_MIN_THRESHOLD = 0.45
+LIVENESS_CLIFF_DROP_DELTA = 0.35      # Relative drop vs healthy EMA (catches deepfake glitches)
 
 # Tier 2 Gemini VLM gating (protects free-tier quota)
 VLM_COOLDOWN_MS = 30_000
@@ -67,6 +88,20 @@ PROHIBITED_DEVICE_TOKENS = (
     "earpiece",
 )
 SECONDARY_AID_TOKENS = ("notes", "cheat sheet", "book", "notebook", "second screen")
+
+CATEGORY_TO_ANOMALY_TYPE: Dict[str, VisionAnomalyType] = {
+    "Phone / Device Detected": VisionAnomalyType.DEVICE_DETECTED,
+    "Multi-Face Detection": VisionAnomalyType.MULTI_FACE,
+    "Liveness / Spoof Risk": VisionAnomalyType.LIVENESS_SPOOF,
+    "Frozen Video Feed": VisionAnomalyType.LIVENESS_SPOOF,
+    "Camera Occlusion": VisionAnomalyType.CAMERA_OCCLUSION,
+    "Face Absent From Frame": VisionAnomalyType.CAMERA_OCCLUSION,
+    "Gaze Deviation (Looking Away)": VisionAnomalyType.GAZE_DEVIATION,
+    "Split-Angle Off-Screen Focus": VisionAnomalyType.GAZE_DEVIATION,
+    "Repetitive Off-Screen Peek Pattern": VisionAnomalyType.GAZE_DEVIATION,
+    "Teleprompter Reading Pattern": VisionAnomalyType.GAZE_DEVIATION,
+    "Head Pose Shift": VisionAnomalyType.HEAD_PITCH_DOWN,
+}
 
 
 class VisionTelemetryFrame(BaseModel):
@@ -91,13 +126,21 @@ class VisionAnomalyEvent(BaseModel):
     timestamp_offset: str           # "HH:MM:SS"
     timestamp_ms: int
     category: str
+    anomaly_type: Optional[VisionAnomalyType] = None
     signal: str
     source: str = "Vision Landmark Gaze Model"
     confidence: float
     severity: str                   # "info", "low", "medium", "high"
-    # Additive forensic metadata (defaults preserve 100% backward compatibility)
     duration_ms: int = 0
     requires_vlm_verification: bool = False
+
+    @model_validator(mode="after")
+    def _populate_anomaly_type(self) -> "VisionAnomalyEvent":
+        if self.anomaly_type is None:
+            self.anomaly_type = CATEGORY_TO_ANOMALY_TYPE.get(
+                self.category, VisionAnomalyType.GAZE_DEVIATION
+            )
+        return self
 
 
 @dataclass
@@ -109,7 +152,6 @@ class _AnomalyStreak:
     last_emitted_ms: int = -1
 
     def update(self, active: bool, ts_ms: int, magnitude: float = 0.0) -> Tuple[int, int]:
-        """Returns (continuous_duration_ms, streak_frame_count)."""
         if not active:
             if self.last_seen_ms is not None and (ts_ms - self.last_seen_ms) > STREAK_GAP_TOLERANCE_MS:
                 self.reset()
@@ -149,7 +191,7 @@ class _SessionVisionState:
     last_ts_ms: int = 0
     event_seq: int = 0
 
-    # O(1) running counters (accurate across multi-hour interviews with bounded RAM)
+    # O(1) running counters (accurate across multi-hour calls with bounded RAM)
     total_frames: int = 0
     camera_active_frames: int = 0
     face_present_frames: int = 0
@@ -157,14 +199,17 @@ class _SessionVisionState:
     multi_face_frames: int = 0
     low_liveness_frames: int = 0
 
-    # Bounded sliding window for gaze/teleprompter/frozen-feed dynamics
     recent_frames: Deque[VisionTelemetryFrame] = field(
+        default_factory=lambda: deque(maxlen=FRAME_RING_BUFFER_SIZE)
+    )
+    # Compact (timestamp_ms, is_offscreen) ring for peek-loop duty-cycle forensics
+    gaze_history: Deque[Tuple[int, bool]] = field(
         default_factory=lambda: deque(maxlen=FRAME_RING_BUFFER_SIZE)
     )
     events: List[VisionAnomalyEvent] = field(default_factory=list)
     streaks: Dict[str, _AnomalyStreak] = field(default_factory=dict)
 
-    # Personal resting baseline (neutralizes external-monitor camera offset)
+    # Online resting-posture calibration + neurodiversity variance tracking
     cal_gaze_x: List[float] = field(default_factory=list)
     cal_gaze_y: List[float] = field(default_factory=list)
     cal_yaw: List[float] = field(default_factory=list)
@@ -174,9 +219,10 @@ class _SessionVisionState:
     base_gaze_y: float = 0.0
     base_yaw: float = 0.0
     base_pitch: float = 0.0
+    baseline_gaze_variance: float = 0.0
 
-    # Frozen-feed tracker
-    last_pose_signature: Optional[Tuple[float, float, float, float, float]] = None
+    # Healthy liveness EMA for relative deepfake cliff-drop detection
+    liveness_ema: float = 0.95
 
     # VLM budget & throttling
     vlm_triggers_sent: int = 0
@@ -190,13 +236,14 @@ class _SessionVisionState:
 
 class VisionProctoringService:
     """
-    Production-hardened real-time & post-session vision proctoring engine:
-      - Bounded ring-buffer memory + LRU session eviction (zero OOM risk)
-      - Online resting-posture calibration (reduces multi-monitor / neurodivergent false positives)
-      - True timestamp-based temporal debouncing per anomaly category (FPS-independent)
-      - Multi-signal evaluation without alert masking (critical events never dropped by low alerts)
-      - Anti-spoofing (liveness + frozen virtual-camera feed) and teleprompter saccade detection
-      - Budget-capped Tier 2 Gemini VLM escalation flagging
+    Forensic vision proctoring state machine:
+      - Bounded ring-buffer memory + LRU session eviction
+      - Stability-gated resting calibration + centered-only slow drift adaptation
+      - VOR-aware Split-Angle head+eye compounding detector
+      - Anti-debouncer 20s Peek-Loop off-screen duty-cycle detector
+      - Smoothed horizontal teleprompter saccade + sawtooth asymmetry analyzer
+      - Micro-motion variance frozen-feed & relative liveness cliff-drop anti-spoofing
+      - Budget-capped Tier 2 Gemini VLM escalation gating
     """
 
     def __init__(self, max_sessions: int = MAX_ACTIVE_SESSIONS) -> None:
@@ -204,28 +251,18 @@ class VisionProctoringService:
         self._sessions: OrderedDict[str, _SessionVisionState] = OrderedDict()
 
     def clear_session(self, session_id: str) -> None:
-        """Explicitly release session memory once final IntegrityReport is persisted."""
         self._sessions.pop(session_id, None)
 
     def ingest_frame(self, frame: VisionTelemetryFrame) -> Optional[VisionAnomalyEvent]:
-        """
-        Process a single telemetry frame, persist all triggered events for this frame,
-        and return the highest-severity newly emitted event (if any).
-        """
         emitted = self.ingest_frame_all(frame)
         if not emitted:
             return None
         return max(emitted, key=lambda e: (SEVERITY_RANK.get(e.severity, 0), e.confidence))
 
     def ingest_frame_all(self, frame: VisionTelemetryFrame) -> List[VisionAnomalyEvent]:
-        """
-        Full multi-channel evaluator: evaluates ALL anomaly detectors independently so
-        co-occurring events (e.g., Phone + Downward Gaze) are never mutually masked.
-        """
         clean = self._sanitize_frame(frame)
         state = self._get_or_create_state(clean.session_id, clean.timestamp_ms)
 
-        # Reject heavily out-of-order stale frames (>5s behind stream head)
         if state.total_frames > 0 and clean.timestamp_ms < (state.last_ts_ms - 5_000):
             logger.debug(
                 "Dropped stale vision frame for %s (ts=%d < head=%d)",
@@ -243,28 +280,35 @@ class VisionProctoringService:
         state.total_frames += 1
         state.recent_frames.append(clean)
 
-        # Update online resting-posture calibration during initial active frames
+        # Online resting-posture calibration + slow centered-only drift compensation
         self._update_calibration(state, clean)
 
-        # Compute baseline-relative gaze & head pose
         rel_gaze_x = clean.gaze_offset_x - state.base_gaze_x
         rel_gaze_y = clean.gaze_offset_y - state.base_gaze_y
         rel_yaw = clean.head_pose_yaw - state.base_yaw
         rel_pitch = clean.head_pose_pitch - state.base_pitch
 
-        # Update accurate O(1) summary counters
         if clean.camera_active:
             state.camera_active_frames += 1
             if clean.faces_detected >= 1:
                 state.face_present_frames += 1
         if clean.faces_detected > 1:
             state.multi_face_frames += 1
-        if clean.camera_active and clean.faces_detected >= 1 and clean.liveness_score < LIVENESS_MIN_THRESHOLD:
-            state.low_liveness_frames += 1
 
-        is_gaze_deviated, gaze_dir_label = self._evaluate_gaze_state(clean, rel_gaze_x, rel_gaze_y)
-        if clean.camera_active and clean.faces_detected >= 1 and not is_gaze_deviated:
-            state.center_gaze_frames += 1
+        # Evaluate gaze & VOR-aware split-angle compounding
+        is_gaze_deviated, gaze_dir_label = self._evaluate_gaze_state(
+            clean, rel_gaze_x, rel_gaze_y, state.baseline_locked
+        )
+        is_split_angle, split_dir_label, split_deg = self._evaluate_split_angle(
+            rel_gaze_x, rel_gaze_y, rel_yaw, rel_pitch
+        )
+        is_offscreen = is_gaze_deviated or is_split_angle
+
+        if clean.camera_active and clean.faces_detected >= 1:
+            state.gaze_history.append((clean.timestamp_ms, is_offscreen))
+            if not is_offscreen:
+                state.center_gaze_frames += 1
+                self._adapt_centered_baseline(state, clean, rel_gaze_x, rel_gaze_y, rel_yaw, rel_pitch)
 
         ts_ms = clean.timestamp_ms
         ts_offset = self._format_offset(ts_ms - state.start_ts_ms)
@@ -323,31 +367,39 @@ class VisionProctoringService:
                 state.streak("multi_face").mark_emitted(ts_ms)
 
         # -------------------------------------------------------------------
-        # Channel 3: Anti-Spoofing (Liveness Score Drop / Virtual Camera)
+        # Channel 3: Anti-Spoofing (Hard Floor + Relative Liveness Cliff Drop)
         # -------------------------------------------------------------------
-        spoof_active = (
-            clean.camera_active
-            and clean.faces_detected >= 1
-            and clean.liveness_score < LIVENESS_MIN_THRESHOLD
-        )
+        liveness_drop = state.liveness_ema - clean.liveness_score
+        hard_spoof = clean.liveness_score < LIVENESS_MIN_THRESHOLD
+        cliff_spoof = liveness_drop >= LIVENESS_CLIFF_DROP_DELTA and clean.liveness_score < 0.70
+        spoof_active = clean.camera_active and clean.faces_detected >= 1 and (hard_spoof or cliff_spoof)
+
+        if clean.camera_active and clean.faces_detected >= 1:
+            if hard_spoof or cliff_spoof:
+                state.low_liveness_frames += 1
+            elif clean.liveness_score >= 0.75:
+                state.liveness_ema = (0.12 * clean.liveness_score) + (0.88 * state.liveness_ema)
+
         sp_dur, sp_frames = state.streak("liveness").update(
-            spoof_active, ts_ms, 1.0 - clean.liveness_score
+            spoof_active, ts_ms, max(1.0 - clean.liveness_score, liveness_drop)
         )
         if spoof_active and sp_dur >= LIVENESS_PERSISTENCE_MS and sp_frames >= 2:
             cat = "Liveness / Spoof Risk"
             if state.streak("liveness").can_emit(ts_ms, CATEGORY_COOLDOWNS_MS[cat]):
+                reason_tag = (
+                    f"low liveness ({clean.liveness_score:.2f})"
+                    if hard_spoof
+                    else f"abrupt liveness drop ({state.liveness_ema:.2f} -> {clean.liveness_score:.2f})"
+                )
                 emitted.append(
                     self._create_event(
                         state=state,
                         ts_ms=ts_ms,
                         ts_offset=ts_offset,
                         category=cat,
-                        signal=(
-                            f"Sustained low liveness score ({clean.liveness_score:.2f}) for "
-                            f"{sp_dur / 1000:.1f}s (possible virtual camera or static photo)"
-                        ),
+                        signal=f"Sustained {reason_tag} for {sp_dur / 1000:.1f}s (virtual camera / replay risk)",
                         source="Anti-Spoof Liveness Engine",
-                        confidence=round(min(0.95, 0.70 + (1.0 - clean.liveness_score) * 0.35), 2),
+                        confidence=round(min(0.95, 0.72 + (1.0 - clean.liveness_score) * 0.32), 2),
                         severity="high",
                         duration_ms=sp_dur,
                         vlm_eligible=True,
@@ -356,11 +408,10 @@ class VisionProctoringService:
                 state.streak("liveness").mark_emitted(ts_ms)
 
         # -------------------------------------------------------------------
-        # Channel 4: Frozen / Looped Video Feed Tampering
+        # Channel 4: Micro-Motion Variance Frozen / Photo-Replay Feed Check
         # -------------------------------------------------------------------
-        frozen_active = self._is_pose_frozen(state, clean)
-        fr_dur, fr_frames = state.streak("frozen").update(frozen_active, ts_ms, 1.0)
-        if frozen_active and fr_dur >= FROZEN_FEED_PERSISTENCE_MS and fr_frames >= 6:
+        frozen_active, frozen_span_ms, frozen_count = self._detect_frozen_feed(state, ts_ms)
+        if frozen_active:
             cat = "Frozen Video Feed"
             if state.streak("frozen").can_emit(ts_ms, CATEGORY_COOLDOWNS_MS[cat]):
                 emitted.append(
@@ -369,18 +420,21 @@ class VisionProctoringService:
                         ts_ms=ts_ms,
                         ts_offset=ts_offset,
                         category=cat,
-                        signal=f"Zero micro-motion across {fr_frames} frames ({fr_dur / 1000:.1f}s); video feed may be frozen or spoofed",
+                        signal=(
+                            f"Near-zero 3D pose micro-motion across {frozen_count} frames "
+                            f"({frozen_span_ms / 1000:.1f}s); feed may be frozen or static replay"
+                        ),
                         source="Temporal Micro-Motion Monitor",
-                        confidence=0.89,
+                        confidence=0.90,
                         severity="medium",
-                        duration_ms=fr_dur,
+                        duration_ms=frozen_span_ms,
                         vlm_eligible=False,
                     )
                 )
                 state.streak("frozen").mark_emitted(ts_ms)
 
         # -------------------------------------------------------------------
-        # Channel 5: Camera Occlusion OR Face Absent From Frame
+        # Channel 5: Camera Occlusion & Face Absence
         # -------------------------------------------------------------------
         cam_off_dur, _ = state.streak("camera_off").update(not clean.camera_active, ts_ms, 1.0)
         if not clean.camera_active and cam_off_dur >= CAMERA_OFF_PERSISTENCE_MS:
@@ -423,9 +477,9 @@ class VisionProctoringService:
                 )
                 state.streak("face_absent").mark_emitted(ts_ms)
 
-        # Skip gaze/head analytics when no face is visible
         if not clean.camera_active or clean.faces_detected == 0:
             state.streak("gaze").update(False, ts_ms)
+            state.streak("split_angle").update(False, ts_ms)
             state.streak("head_pose").update(False, ts_ms)
             return emitted
 
@@ -438,7 +492,6 @@ class VisionProctoringService:
             cat = "Gaze Deviation (Looking Away)"
             if state.streak("gaze").can_emit(ts_ms, CATEGORY_COOLDOWNS_MS[cat]):
                 is_down = gaze_dir_label.startswith("DOWN")
-                # Keep severity proportional: never auto-label a side glance as "high" without extreme offset
                 severity = "high" if (is_down and (gz_dur >= 4_500 or bool(matched_aids))) else "medium"
                 aid_note = f"; nearby visual cue: {', '.join(matched_aids)}" if matched_aids else ""
                 emitted.append(
@@ -461,12 +514,70 @@ class VisionProctoringService:
                 state.streak("gaze").mark_emitted(ts_ms)
 
         # -------------------------------------------------------------------
-        # Channel 7: Horizontal Teleprompter Saccade Reading Detection
+        # Channel 7: VOR-Aware Split-Angle Head+Eye Compounding (>= 2.6s)
+        # Catches candidates staying just under individual yaw and iris thresholds
         # -------------------------------------------------------------------
-        scan_detected, scan_sweeps = self._detect_teleprompter_scanning(state, ts_ms)
+        split_only = is_split_angle and not is_gaze_deviated
+        sa_dur, sa_frames = state.streak("split_angle").update(split_only, ts_ms, split_deg)
+        if split_only and sa_dur >= SPLIT_ANGLE_PERSISTENCE_MS and sa_frames >= 2:
+            cat = "Split-Angle Off-Screen Focus"
+            if state.streak("split_angle").can_emit(ts_ms, CATEGORY_COOLDOWNS_MS[cat]):
+                is_down = split_dir_label == "DOWN"
+                emitted.append(
+                    self._create_event(
+                        state=state,
+                        ts_ms=ts_ms,
+                        ts_offset=ts_offset,
+                        category=cat,
+                        signal=(
+                            f"Compounded head+eye off-axis focus ({split_dir_label}, ~{split_deg:.0f}° combined) "
+                            f"for {sa_dur / 1000:.1f}s (ΔYaw={rel_yaw:+.1f}°, ΔPitch={rel_pitch:+.1f}°, "
+                            f"Δx={rel_gaze_x:+.2f}, Δy={rel_gaze_y:+.2f})"
+                        ),
+                        source="VOR-Aware Gaze+Pose Fusion",
+                        confidence=round(min(0.93, 0.76 + min((split_deg - 20.0) / 40.0, 0.17)), 2),
+                        severity="medium",
+                        duration_ms=sa_dur,
+                        vlm_eligible=is_down or split_deg >= 32.0,
+                    )
+                )
+                state.streak("split_angle").mark_emitted(ts_ms)
+
+        # -------------------------------------------------------------------
+        # Channel 8: Anti-Debouncer 20s Peek-Loop Duty-Cycle Detector
+        # Catches repeated 1.5-2.5s glances that individually reset the 3s timer
+        # -------------------------------------------------------------------
+        peek_hit, peek_transitions, peek_ratio = self._detect_peek_loop(state, ts_ms)
+        if peek_hit:
+            cat = "Repetitive Off-Screen Peek Pattern"
+            if state.streak("peek_loop").can_emit(ts_ms, CATEGORY_COOLDOWNS_MS[cat]):
+                emitted.append(
+                    self._create_event(
+                        state=state,
+                        ts_ms=ts_ms,
+                        ts_offset=ts_offset,
+                        category=cat,
+                        signal=(
+                            f"Repeated off-screen peek cycle detected ({peek_transitions} glance transitions, "
+                            f"{int(peek_ratio * 100)}% off-screen across last {PEEK_WINDOW_MS // 1000}s)"
+                        ),
+                        source="Off-Screen Duty-Cycle Analyzer",
+                        confidence=round(min(0.92, 0.76 + max(0.0, peek_ratio - 0.35) * 0.40), 2),
+                        severity="medium" if peek_ratio < 0.60 else "high",
+                        duration_ms=PEEK_WINDOW_MS,
+                        vlm_eligible=is_offscreen,
+                    )
+                )
+                state.streak("peek_loop").mark_emitted(ts_ms)
+
+        # -------------------------------------------------------------------
+        # Channel 9: Horizontal Teleprompter Saccade & Sawtooth Analyzer
+        # -------------------------------------------------------------------
+        scan_detected, scan_sweeps, has_sawtooth = self._detect_teleprompter_scanning(state, ts_ms)
         if scan_detected:
             cat = "Teleprompter Reading Pattern"
             if state.streak("teleprompter").can_emit(ts_ms, CATEGORY_COOLDOWNS_MS[cat]):
+                style_note = " with carriage-return sawtooth asymmetry" if has_sawtooth else ""
                 emitted.append(
                     self._create_event(
                         state=state,
@@ -475,10 +586,10 @@ class VisionProctoringService:
                         category=cat,
                         signal=(
                             f"Rhythmic horizontal eye-scanning pattern detected "
-                            f"({scan_sweeps} sweeps across ~8s with flat vertical gaze)"
+                            f"({scan_sweeps} sweeps across ~8s, flat vertical band{style_note})"
                         ),
                         source="Temporal Gaze Saccade Analyzer",
-                        confidence=0.82,
+                        confidence=0.89 if has_sawtooth else 0.81,
                         severity="medium",
                         duration_ms=8_000,
                         vlm_eligible=False,
@@ -487,7 +598,7 @@ class VisionProctoringService:
                 state.streak("teleprompter").mark_emitted(ts_ms)
 
         # -------------------------------------------------------------------
-        # Channel 8: Baseline-Relative Sustained Head Pose Shift (>= 3.0s)
+        # Channel 10: Baseline-Relative Sustained Head Pose Shift (>= 3.0s)
         # -------------------------------------------------------------------
         pose_deviated = (
             abs(rel_yaw) > HEAD_YAW_DELTA_THRESHOLD
@@ -525,7 +636,6 @@ class VisionProctoringService:
         start_ms: int,
         end_ms: int,
     ) -> List[VisionAnomalyEvent]:
-        """Helper for ScoringWorker / heuristics.py to correlate vision flags with a Q&A turn."""
         state = self._sessions.get(session_id)
         if not state:
             return []
@@ -536,10 +646,6 @@ class VisionProctoringService:
         session_id: str,
         allow_demo_mock: bool = False,
     ) -> Dict[str, Any]:
-        """
-        Aggregate visual telemetry and calculate attention & continuity ratings.
-        NEVER fabricates cheating accusations on empty sessions unless allow_demo_mock=True.
-        """
         state = self._sessions.get(session_id)
         if state is None or state.total_frames == 0:
             if allow_demo_mock:
@@ -550,11 +656,15 @@ class VisionProctoringService:
                 "visual_attention_score": None,
                 "gaze_consistency_pct": None,
                 "face_coverage_pct": None,
+                "offscreen_duty_cycle_pct": None,
                 "calibration_complete": False,
+                "baseline_gaze_variance": 0.0,
                 "baseline_pose": None,
                 "phone_events_count": 0,
                 "multi_face_events_count": 0,
                 "gaze_deviation_events_count": 0,
+                "split_angle_events_count": 0,
+                "peek_loop_events_count": 0,
                 "teleprompter_scan_events_count": 0,
                 "liveness_risk_events_count": 0,
                 "face_absent_events_count": 0,
@@ -567,27 +677,29 @@ class VisionProctoringService:
         active_face_denom = max(state.face_present_frames, 1)
 
         gaze_consistency = round((state.center_gaze_frames / active_face_denom) * 100.0, 1)
+        offscreen_duty_cycle = round(100.0 - gaze_consistency, 1)
         face_coverage = round((state.face_present_frames / total) * 100.0, 1)
 
         events = state.events
         phone_events = sum(1 for e in events if e.category == "Phone / Device Detected")
         multi_face_events = sum(1 for e in events if e.category == "Multi-Face Detection")
         gaze_dev_events = sum(1 for e in events if e.category == "Gaze Deviation (Looking Away)")
+        split_angle_events = sum(1 for e in events if e.category == "Split-Angle Off-Screen Focus")
+        peek_loop_events = sum(1 for e in events if e.category == "Repetitive Off-Screen Peek Pattern")
         teleprompter_events = sum(1 for e in events if e.category == "Teleprompter Reading Pattern")
         liveness_events = sum(1 for e in events if e.category in ("Liveness / Spoof Risk", "Frozen Video Feed"))
         face_absent_events = sum(1 for e in events if e.category == "Face Absent From Frame")
         camera_off_events = sum(1 for e in events if e.category == "Camera Occlusion")
 
-        # Bounded, event-based visual attention penalty (prevents single walk-by from zeroing score)
         penalty = (
             min(phone_events * 22.0, 44.0)
             + min(multi_face_events * 16.0, 32.0)
             + min(liveness_events * 18.0, 36.0)
-            + min(gaze_dev_events * 5.0, 25.0)
+            + min((gaze_dev_events + split_angle_events) * 5.0, 25.0)
+            + min(peek_loop_events * 9.0, 27.0)
             + min(teleprompter_events * 8.0, 24.0)
             + min((camera_off_events + face_absent_events) * 6.0, 18.0)
         )
-        # Modest continuity penalty if candidate was off-camera for >20% of the call
         if face_coverage < 80.0:
             penalty += (80.0 - face_coverage) * 0.25
 
@@ -599,7 +711,9 @@ class VisionProctoringService:
             "visual_attention_score": visual_attention,
             "gaze_consistency_pct": gaze_consistency,
             "face_coverage_pct": face_coverage,
+            "offscreen_duty_cycle_pct": offscreen_duty_cycle,
             "calibration_complete": state.baseline_locked,
+            "baseline_gaze_variance": round(state.baseline_gaze_variance, 4),
             "baseline_pose": {
                 "gaze_x": round(state.base_gaze_x, 3),
                 "gaze_y": round(state.base_gaze_y, 3),
@@ -608,17 +722,19 @@ class VisionProctoringService:
             },
             "phone_events_count": phone_events,
             "multi_face_events_count": multi_face_events,
-            "gaze_deviation_events_count": gaze_dev_events,
+            "gaze_deviation_events_count": gaze_dev_events + split_angle_events + peek_loop_events,
+            "split_angle_events_count": split_angle_events,
+            "peek_loop_events_count": peek_loop_events,
             "teleprompter_scan_events_count": teleprompter_events,
             "liveness_risk_events_count": liveness_events,
             "face_absent_events_count": face_absent_events,
             "camera_off_events_count": camera_off_events,
             "vlm_triggers_sent": state.vlm_triggers_sent,
-            "anomaly_events": [e.model_dump() for e in events],
+            "anomaly_events": [e.model_dump(mode="json") for e in events],
         }
 
     # -----------------------------------------------------------------------
-    # Internal Helpers
+    # Internal Forensic Engines
     # -----------------------------------------------------------------------
     def _get_or_create_state(self, session_id: str, ts_ms: int) -> _SessionVisionState:
         state = self._sessions.get(session_id)
@@ -635,7 +751,6 @@ class VisionProctoringService:
 
     @staticmethod
     def _sanitize_frame(frame: VisionTelemetryFrame) -> VisionTelemetryFrame:
-        """Defensively clamps corrupted or adversarial telemetry values (NaN/Inf/out-of-range)."""
         def _clamp(val: float, lo: float, hi: float, default: float = 0.0) -> float:
             if not isinstance(val, (int, float)) or not math.isfinite(val):
                 return default
@@ -666,7 +781,6 @@ class VisionProctoringService:
             return
         if not frame.camera_active or frame.faces_detected != 1 or frame.phone_detected:
             return
-        # Only sample plausible resting frames (not while looking 70 degrees away)
         if abs(frame.head_pose_yaw) > 30.0 or abs(frame.head_pose_pitch) > 30.0:
             return
 
@@ -675,43 +789,187 @@ class VisionProctoringService:
         state.cal_yaw.append(frame.head_pose_yaw)
         state.cal_pitch.append(frame.head_pose_pitch)
 
-        if len(state.cal_gaze_x) >= CALIBRATION_TARGET_FRAMES:
-            state.base_gaze_x = max(
-                -MAX_BASELINE_GAZE_OFFSET,
-                min(MAX_BASELINE_GAZE_OFFSET, statistics.median(state.cal_gaze_x)),
-            )
-            state.base_gaze_y = max(
-                -MAX_BASELINE_GAZE_OFFSET,
-                min(MAX_BASELINE_GAZE_OFFSET, statistics.median(state.cal_gaze_y)),
-            )
-            state.base_yaw = max(
-                -MAX_BASELINE_POSE_OFFSET,
-                min(MAX_BASELINE_POSE_OFFSET, statistics.median(state.cal_yaw)),
-            )
-            state.base_pitch = max(
-                -MAX_BASELINE_POSE_OFFSET,
-                min(MAX_BASELINE_POSE_OFFSET, statistics.median(state.cal_pitch)),
-            )
-            state.baseline_locked = True
-            # Free calibration buffers immediately
-            state.cal_gaze_x.clear()
-            state.cal_gaze_y.clear()
-            state.cal_yaw.clear()
-            state.cal_pitch.clear()
+        n = len(state.cal_gaze_x)
+        if n < CALIBRATION_TARGET_FRAMES:
+            return
+
+        med_x = statistics.median(state.cal_gaze_x)
+        mad_x = statistics.median([abs(v - med_x) for v in state.cal_gaze_x])
+
+        # Wait for stable resting window (blocks startup calibration poisoning) unless buffer cap reached
+        if mad_x > CALIBRATION_MAX_GAZE_MAD and n < CALIBRATION_MAX_BUFFER:
+            return
+
+        med_y = statistics.median(state.cal_gaze_y)
+        state.base_gaze_x = max(-MAX_BASELINE_GAZE_OFFSET, min(MAX_BASELINE_GAZE_OFFSET, med_x))
+        state.base_gaze_y = max(-MAX_BASELINE_GAZE_OFFSET, min(MAX_BASELINE_GAZE_OFFSET, med_y))
+        state.base_yaw = max(
+            -MAX_BASELINE_POSE_OFFSET, min(MAX_BASELINE_POSE_OFFSET, statistics.median(state.cal_yaw))
+        )
+        state.base_pitch = max(
+            -MAX_BASELINE_POSE_OFFSET, min(MAX_BASELINE_POSE_OFFSET, statistics.median(state.cal_pitch))
+        )
+        state.baseline_gaze_variance = float(
+            statistics.pvariance(state.cal_gaze_x) + statistics.pvariance(state.cal_gaze_y)
+        )
+        state.baseline_locked = True
+        state.cal_gaze_x.clear()
+        state.cal_gaze_y.clear()
+        state.cal_yaw.clear()
+        state.cal_pitch.clear()
+
+    @staticmethod
+    def _adapt_centered_baseline(
+        state: _SessionVisionState,
+        frame: VisionTelemetryFrame,
+        rel_x: float,
+        rel_y: float,
+        rel_yaw: float,
+        rel_pitch: float,
+    ) -> None:
+        """Ultra-slow EMA posture drift compensation ONLY when candidate is firmly centered."""
+        if not state.baseline_locked or frame.faces_detected != 1 or frame.liveness_score < 0.70:
+            return
+        if abs(rel_x) > 0.12 or abs(rel_y) > 0.12 or abs(rel_yaw) > 10.0 or abs(rel_pitch) > 10.0:
+            return
+
+        a = BASELINE_DRIFT_ALPHA
+        state.base_gaze_x = max(
+            -MAX_BASELINE_GAZE_OFFSET,
+            min(MAX_BASELINE_GAZE_OFFSET, (1.0 - a) * state.base_gaze_x + a * frame.gaze_offset_x),
+        )
+        state.base_gaze_y = max(
+            -MAX_BASELINE_GAZE_OFFSET,
+            min(MAX_BASELINE_GAZE_OFFSET, (1.0 - a) * state.base_gaze_y + a * frame.gaze_offset_y),
+        )
+        state.base_yaw = max(
+            -MAX_BASELINE_POSE_OFFSET,
+            min(MAX_BASELINE_POSE_OFFSET, (1.0 - a) * state.base_yaw + a * frame.head_pose_yaw),
+        )
+        state.base_pitch = max(
+            -MAX_BASELINE_POSE_OFFSET,
+            min(MAX_BASELINE_POSE_OFFSET, (1.0 - a) * state.base_pitch + a * frame.head_pose_pitch),
+        )
 
     @staticmethod
     def _evaluate_gaze_state(
         frame: VisionTelemetryFrame,
         rel_x: float,
         rel_y: float,
+        baseline_locked: bool = False,
     ) -> Tuple[bool, str]:
-        if frame.gaze_direction == "down" or rel_y > GAZE_Y_DOWN_DELTA_THRESHOLD:
+        has_numeric_offsets = (
+            baseline_locked
+            or abs(frame.gaze_offset_x) > 1e-4
+            or abs(frame.gaze_offset_y) > 1e-4
+        )
+        if has_numeric_offsets:
+            if rel_y > GAZE_Y_DOWN_DELTA_THRESHOLD:
+                return (True, "DOWN (Lap / Secondary Device Area)")
+            if abs(rel_x) > GAZE_X_DELTA_THRESHOLD:
+                return (True, "RIGHT" if rel_x > 0 else "LEFT")
+            return (False, "CENTER")
+
+        if frame.gaze_direction == "down":
             return (True, "DOWN (Lap / Secondary Device Area)")
-        if abs(rel_x) > GAZE_X_DELTA_THRESHOLD or frame.gaze_direction in ("left", "right"):
-            if frame.gaze_direction in ("left", "right"):
-                return (True, frame.gaze_direction.upper())
-            return (True, "RIGHT" if rel_x > 0 else "LEFT")
+        if frame.gaze_direction in ("left", "right"):
+            return (True, frame.gaze_direction.upper())
         return (False, "CENTER")
+
+    @staticmethod
+    def _evaluate_split_angle(
+        rel_x: float,
+        rel_y: float,
+        rel_yaw: float,
+        rel_pitch: float,
+    ) -> Tuple[bool, str, float]:
+        """
+        VOR-aware head+eye vector compounding:
+          - Opposite-sign head/eye motion (turning head while keeping eyes on webcam) cancels out.
+          - Same-direction head+eye offset (split-angle bypass toward a 2nd monitor or lap) sums up.
+        """
+        # Horizontal split-angle (requires same direction to respect vestibulo-ocular reflex)
+        if (rel_yaw * rel_x) > 0.0 and abs(rel_yaw) >= 12.0 and abs(rel_x) >= 0.20:
+            horiz_deg = abs(rel_yaw) + (abs(rel_x) * EYE_OFFSET_TO_DEGREES)
+            if horiz_deg >= SPLIT_ANGLE_YAW_DEG_THRESHOLD:
+                return (True, "RIGHT" if rel_x > 0 else "LEFT", horiz_deg)
+
+        # Vertical downward split-angle (head tilted down + eyes shifted down toward lap/phone)
+        if rel_pitch <= -13.0 and rel_y >= 0.20:
+            vert_deg = abs(rel_pitch) + (rel_y * EYE_OFFSET_TO_DEGREES)
+            if vert_deg >= SPLIT_ANGLE_PITCH_DEG_THRESHOLD:
+                return (True, "DOWN", vert_deg)
+
+        return (False, "CENTER", 0.0)
+
+    @staticmethod
+    def _detect_peek_loop(state: _SessionVisionState, now_ms: int) -> Tuple[bool, int, float]:
+        window = [
+            (ts, off) for ts, off in state.gaze_history if (now_ms - ts) <= PEEK_WINDOW_MS
+        ]
+        if len(window) < PEEK_MIN_FRAMES:
+            return (False, 0, 0.0)
+
+        span_ms = window[-1][0] - window[0][0]
+        if span_ms < PEEK_MIN_SPAN_MS:
+            return (False, 0, 0.0)
+
+        off_count = sum(1 for _, off in window if off)
+        off_ratio = off_count / len(window)
+
+        transitions = 0
+        prev_off = window[0][1]
+        for _, off in window[1:]:
+            if off and not prev_off:
+                transitions += 1
+            prev_off = off
+
+        return (
+            transitions >= PEEK_MIN_TRANSITIONS and off_ratio >= PEEK_MIN_OFFSCREEN_RATIO,
+            transitions,
+            off_ratio,
+        )
+
+    @staticmethod
+    def _detect_frozen_feed(state: _SessionVisionState, now_ms: int) -> Tuple[bool, int, int]:
+        """
+        Micro-motion variance detector: catches exact frozen frames AND low-noise photo/loop replays,
+        while ignoring zeroed-Euler synthetic stubs (yaw=pitch=roll=0.0).
+        """
+        window = [
+            f
+            for f in state.recent_frames
+            if (now_ms - f.timestamp_ms) <= (FROZEN_FEED_PERSISTENCE_MS + 1_500)
+            and f.camera_active
+            and f.faces_detected >= 1
+        ]
+        if len(window) < 6:
+            return (False, 0, 0)
+
+        span_ms = window[-1].timestamp_ms - window[0].timestamp_ms
+        if span_ms < FROZEN_FEED_PERSISTENCE_MS:
+            return (False, 0, 0)
+
+        # Exclude gaze-only synthetic stubs that leave all 3D Euler angles at exact 0.0
+        has_3d_pose = any(
+            abs(f.head_pose_yaw) > 1e-4 or abs(f.head_pose_pitch) > 1e-4 or abs(f.head_pose_roll) > 1e-4
+            for f in window
+        )
+        if not has_3d_pose:
+            return (False, 0, 0)
+
+        yaw_std = statistics.pstdev([f.head_pose_yaw for f in window])
+        pitch_std = statistics.pstdev([f.head_pose_pitch for f in window])
+        gaze_x_std = statistics.pstdev([f.gaze_offset_x for f in window])
+        gaze_y_std = statistics.pstdev([f.gaze_offset_y for f in window])
+
+        is_frozen = (
+            yaw_std < 0.05
+            and pitch_std < 0.05
+            and gaze_x_std < 0.0025
+            and gaze_y_std < 0.0025
+        )
+        return (is_frozen, span_ms, len(window))
 
     @staticmethod
     def _classify_detected_objects(frame: VisionTelemetryFrame) -> Tuple[List[str], List[str]]:
@@ -728,29 +986,13 @@ class VisionProctoringService:
         return (list(dict.fromkeys(devices)), list(dict.fromkeys(aids)))
 
     @staticmethod
-    def _is_pose_frozen(state: _SessionVisionState, frame: VisionTelemetryFrame) -> bool:
-        if not frame.camera_active or frame.faces_detected == 0:
-            state.last_pose_signature = None
-            return False
-
-        sig = (
-            round(frame.gaze_offset_x, 4),
-            round(frame.gaze_offset_y, 4),
-            round(frame.head_pose_yaw, 3),
-            round(frame.head_pose_pitch, 3),
-            round(frame.head_pose_roll, 3),
-        )
-        # Ignore all-zero default stubs sent by minimal clients without pose extraction
-        all_zero_stub = sig == (0.0, 0.0, 0.0, 0.0, 0.0) and frame.liveness_score >= 0.85
-        is_identical = (state.last_pose_signature == sig) and not all_zero_stub
-        state.last_pose_signature = sig
-        return is_identical
-
-    @staticmethod
-    def _detect_teleprompter_scanning(state: _SessionVisionState, now_ms: int) -> Tuple[bool, int]:
+    def _detect_teleprompter_scanning(
+        state: _SessionVisionState,
+        now_ms: int,
+    ) -> Tuple[bool, int, bool]:
         """
         Detects rhythmic horizontal eye sweeps (reading scrolled LLM text on-screen)
-        over the last 8 seconds while vertical gaze stays flat.
+        across the last 8s while vertical eye band stays flat, plus sawtooth carriage-return asymmetry.
         """
         window = [
             f
@@ -758,29 +1000,57 @@ class VisionProctoringService:
             if (now_ms - f.timestamp_ms) <= 8_000 and f.camera_active and f.faces_detected == 1
         ]
         if len(window) < 8:
-            return (False, 0)
+            return (False, 0, False)
 
-        xs = [f.gaze_offset_x - state.base_gaze_x for f in window]
+        raw_xs = [f.gaze_offset_x - state.base_gaze_x for f in window]
         ys = [f.gaze_offset_y - state.base_gaze_y for f in window]
 
-        # Reading lines keeps vertical eye band tight while sweeping horizontally
         if statistics.pstdev(ys) > 0.09:
-            return (False, 0)
+            return (False, 0, False)
 
-        # Count significant horizontal direction reversals (line sweeps + carriage returns)
+        # Require meaningful horizontal scan width (filters tight sensor noise)
+        if (max(raw_xs) - min(raw_xs)) < 0.22:
+            return (False, 0, False)
+
+        # Light 3-point smoothing only at higher FPS (>=10 samples in 8s) so 1 FPS sweeps stay sharp
+        if len(raw_xs) >= 10:
+            xs = [raw_xs[0]] + [
+                0.25 * raw_xs[i - 1] + 0.50 * raw_xs[i] + 0.25 * raw_xs[i + 1]
+                for i in range(1, len(raw_xs) - 1)
+            ] + [raw_xs[-1]]
+        else:
+            xs = raw_xs
+
         sweeps = 0
         last_dir = 0
         anchor_x = xs[0]
-        for x in xs[1:]:
-            delta = x - anchor_x
+        pos_steps: List[float] = []
+        neg_steps: List[float] = []
+
+        for i in range(1, len(xs)):
+            step = xs[i] - xs[i - 1]
+            if step > 0.02:
+                pos_steps.append(step)
+            elif step < -0.02:
+                neg_steps.append(abs(step))
+
+            delta = xs[i] - anchor_x
             if abs(delta) >= 0.14:
                 curr_dir = 1 if delta > 0 else -1
                 if last_dir != 0 and curr_dir != last_dir:
                     sweeps += 1
                 last_dir = curr_dir
-                anchor_x = x
+                anchor_x = xs[i]
 
-        return (sweeps >= 3, sweeps)
+        # Sawtooth reading signature: fast carriage returns in one direction vs slower tracking in the other
+        has_sawtooth = False
+        if pos_steps and neg_steps:
+            ratio = max(statistics.fmean(pos_steps), statistics.fmean(neg_steps)) / max(
+                min(statistics.fmean(pos_steps), statistics.fmean(neg_steps)), 1e-4
+            )
+            has_sawtooth = ratio >= 1.65
+
+        return (sweeps >= 3, sweeps, has_sawtooth)
 
     def _create_event(
         self,
@@ -813,6 +1083,7 @@ class VisionProctoringService:
             timestamp_offset=ts_offset,
             timestamp_ms=ts_ms,
             category=category,
+            anomaly_type=CATEGORY_TO_ANOMALY_TYPE.get(category, VisionAnomalyType.GAZE_DEVIATION),
             signal=signal,
             source=source,
             confidence=round(max(0.0, min(1.0, confidence)), 2),
@@ -841,11 +1112,15 @@ class VisionProctoringService:
             "visual_attention_score": 78.5,
             "gaze_consistency_pct": 82.4,
             "face_coverage_pct": 98.6,
+            "offscreen_duty_cycle_pct": 17.6,
             "calibration_complete": True,
+            "baseline_gaze_variance": 0.0042,
             "baseline_pose": {"gaze_x": 0.02, "gaze_y": -0.01, "yaw": 1.2, "pitch": -0.8},
             "phone_events_count": 1,
             "multi_face_events_count": 1,
             "gaze_deviation_events_count": 1,
+            "split_angle_events_count": 0,
+            "peek_loop_events_count": 0,
             "teleprompter_scan_events_count": 0,
             "liveness_risk_events_count": 0,
             "face_absent_events_count": 0,
@@ -858,6 +1133,7 @@ class VisionProctoringService:
                     "timestamp_offset": "00:01:12",
                     "timestamp_ms": 72_000,
                     "category": "Gaze Deviation (Looking Away)",
+                    "anomaly_type": VisionAnomalyType.GAZE_DEVIATION.value,
                     "signal": "Sustained off-screen gaze directed RIGHT for 3.6s (demo sample)",
                     "source": "Calibrated Iris Gaze Model",
                     "confidence": 0.88,
@@ -871,6 +1147,7 @@ class VisionProctoringService:
                     "timestamp_offset": "00:02:45",
                     "timestamp_ms": 165_000,
                     "category": "Phone / Device Detected",
+                    "anomaly_type": VisionAnomalyType.DEVICE_DETECTED.value,
                     "signal": "Secondary electronic device (phone) persisted in frame (demo sample)",
                     "source": "Object / VLM Detector",
                     "confidence": 0.94,
