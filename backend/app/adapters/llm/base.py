@@ -49,6 +49,8 @@ THINK_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 CODE_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
 NON_ALNUM_RE = re.compile(r"[^a-z0-9\s]+")
 WHITESPACE_RE = re.compile(r"\s+")
+WORD_SPAN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
+ELLIPSIS_SPLIT_RE = re.compile(r"\.\.\.+|…+")
 
 FORENSIC_SYSTEM_PROMPT = """You are a forensic technical interview integrity analyst for OCULUS.
 Your mission is to evaluate whether a candidate's spoken answer shows strong evidence of live human cognitive construction OR real-time recitation from generative AI / teleprompter assistance.
@@ -191,9 +193,12 @@ class ForensicReasoningToolkit:
 
     @classmethod
     def verify_verbatim_quotes(cls, raw_quotes: Any, source_text: str) -> list[str]:
-        if not isinstance(raw_quotes, list):
+        if not isinstance(raw_quotes, list) or not source_text:
             return []
+
         norm_source = cls._normalize_text(source_text)
+        source_spans = [(m.group(0).lower(), m.start(), m.end()) for m in WORD_SPAN_RE.finditer(source_text)]
+        source_tokens = [tok for tok, _, _ in source_spans]
         verified: list[str] = []
         seen: set[str] = set()
 
@@ -201,15 +206,105 @@ class ForensicReasoningToolkit:
             quote = str(item).strip().strip('"').strip("'")
             if len(quote) < 6:
                 continue
+
             norm_quote = cls._normalize_text(quote)
             if not norm_quote or norm_quote in seen:
                 continue
+
+            matched_text: Optional[str] = None
             if norm_quote in norm_source:
-                verified.append(quote)
+                matched_text = quote
+            else:
+                matched_text = cls._match_fallback_quote_span(quote, source_text, source_spans, source_tokens)
+
+            if not matched_text:
+                continue
+
+            norm_matched = cls._normalize_text(matched_text)
+            if norm_matched and norm_matched not in seen:
+                verified.append(matched_text)
                 seen.add(norm_quote)
+                seen.add(norm_matched)
             if len(verified) == 3:
                 break
+
         return verified
+
+    @classmethod
+    def _match_fallback_quote_span(
+        cls,
+        quote: str,
+        source_text: str,
+        source_spans: list[tuple[str, int, int]],
+        source_tokens: list[str],
+    ) -> Optional[str]:
+        if not source_tokens:
+            return None
+
+        # Strategy 1: Ellipsis-separated phrases must appear in order in source_text
+        if ELLIPSIS_SPLIT_RE.search(quote):
+            segments = [
+                cls._normalize_text(seg).split()
+                for seg in ELLIPSIS_SPLIT_RE.split(quote)
+            ]
+            non_trivial = [seg for seg in segments if len(seg) >= 2]
+            if non_trivial:
+                cursor = 0
+                matched_ranges: list[tuple[int, int]] = []
+                for seg in non_trivial:
+                    seg_len = len(seg)
+                    found_at = next(
+                        (
+                            i
+                            for i in range(cursor, len(source_tokens) - seg_len + 1)
+                            if source_tokens[i : i + seg_len] == seg
+                        ),
+                        None,
+                    )
+                    if found_at is None:
+                        matched_ranges = []
+                        break
+                    matched_ranges.append((found_at, found_at + seg_len - 1))
+                    cursor = found_at + seg_len
+
+                if matched_ranges:
+                    span_start = matched_ranges[0][0]
+                    span_end = matched_ranges[-1][1]
+                    max_span = max(40, sum(len(s) for s in non_trivial) * 4)
+                    if (span_end - span_start + 1) <= max_span:
+                        return source_text[source_spans[span_start][1] : source_spans[span_end][2]]
+                    longest = max(matched_ranges, key=lambda r: r[1] - r[0])
+                    return source_text[source_spans[longest[0]][1] : source_spans[longest[1]][2]]
+
+        # Strategy 2: Tight sliding window (>= 80% content token recall in <= 2x quote length)
+        all_quote_tokens = cls._normalize_text(quote).split()
+        content_tokens = [tok for tok in all_quote_tokens if len(tok) >= 3]
+        if len(content_tokens) < 3:
+            return None
+
+        content_set = set(content_tokens)
+        required_hits = max(3, int(-(-0.80 * len(content_tokens) // 1)))  # ceil(0.8 * len)
+        window_size = min(len(source_tokens), max(len(all_quote_tokens) * 2, len(content_tokens) * 2))
+
+        best_count = 0
+        best_range: Optional[tuple[int, int]] = None
+        for start in range(len(source_tokens)):
+            end = min(len(source_tokens), start + window_size)
+            window_slice = source_tokens[start:end]
+            hits = [start + offset for offset, tok in enumerate(window_slice) if tok in content_set]
+            # Count how many quote content tokens are covered in this tight window
+            covered = sum(1 for tok in content_tokens if tok in window_slice)
+            if covered >= required_hits and hits:
+                tight_span = hits[-1] - hits[0] + 1
+                if covered > best_count or (
+                    covered == best_count and best_range is not None and tight_span < (best_range[1] - best_range[0] + 1)
+                ):
+                    best_count = covered
+                    best_range = (hits[0], hits[-1])
+
+        if best_range is not None:
+            return source_text[source_spans[best_range[0]][1] : source_spans[best_range[1]][2]]
+        return None
 
     @classmethod
     def sanitize_and_calibrate_verdict(
@@ -236,7 +331,20 @@ class ForensicReasoningToolkit:
             confidence = ConfidenceBand.MEDIUM
 
         vision_flags = getattr(heuristics, "concurrent_vision_flags", 0) if heuristics else 0
-        if not verified_quotes and vision_flags == 0 and not injection_hits:
+        has_audio_corroboration = bool(
+            heuristics is not None
+            and (
+                len(heuristics.ai_tell_matches) >= 2
+                or heuristics.deterministic_risk >= 45.0
+                or heuristics.disfluency_drop >= 2.5
+            )
+        )
+        if (
+            not verified_quotes
+            and vision_flags == 0
+            and not injection_hits
+            and not has_audio_corroboration
+        ):
             if score > NO_EVIDENCE_SCORE_CEILING:
                 score = NO_EVIDENCE_SCORE_CEILING
                 cap_msg = (
