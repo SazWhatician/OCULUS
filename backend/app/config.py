@@ -60,5 +60,33 @@ class Settings(BaseSettings):
     STREAM_MAXLEN_AUDIO: int = 5000
     STREAM_MAXLEN_VIDEO: int = 300
 
+    # LLM, STT, Proctoring & Webhook Tuning Overrides
+    LLM_ALLOW_MOCK_FALLBACK: bool = True
+    LLM_PROVIDER_TIMEOUT_SECONDS: float = 22.0
+    LLM_HIGH_RISK_CONSENSUS: bool = False
+    GROQ_PRIMARY_MODEL: str = "llama-3.3-70b-versatile"
+    GROQ_FALLBACK_MODELS: str = "qwen/qwen3-32b,llama-3.1-8b-instant"
+    GROQ_WHISPER_MODEL: str = "whisper-large-v3-turbo"
+    GROQ_MAX_RETRIES: int = 2
+    GEMINI_TEXT_MODEL: str = "gemini-3.8-flash"
+    GEMINI_TEXT_FALLBACK_MODELS: str = "gemini-3.5-flash-lite,gemini-2.5-flash-lite"
+    GEMINI_VLM_MODEL: str = "gemini-3.5-flash-lite"
+    GEMINI_VLM_FALLBACK_MODELS: str = "gemini-3.8-flash,gemini-2.5-flash-lite"
+    GEMINI_MAX_RETRIES: int = 2
+    GEMINI_MAX_VLM_CALLS_PER_SESSION: int = 12
+    STT_ALLOW_MOCK_FALLBACK: bool = True
+    STT_PROVIDER_TIMEOUT_SECONDS: float = 60.0
+    SPEECHMATICS_BASE_URL: str = "https://asr.api.speechmatics.com/v2"
+    SPEECHMATICS_OPERATING_POINT: str = "enhanced"
+    SPEECHMATICS_LANGUAGE: str = "en"
+    SPEECHMATICS_POLL_TIMEOUT_SEC: float = 45.0
+    SPEECHMATICS_MAX_RETRIES: int = 2
+    ATTENDEE_WEBHOOK_ALLOW_INSECURE_DEV: bool = False
+    PROCTORING_MAX_LLM_TURNS: int = 8
+    PROCTORING_LLM_CONCURRENCY: int = 2
+    SCORING_MAX_LLM_TURNS: int = 8
+    SCORING_IDLE_FLUSH_SECONDS: float = 18.0
+    SCORING_SESSION_TTL_SECONDS: float = 900.0
+
 
 settings = Settings()
