@@ -42,6 +42,7 @@ class DemoFileAdapter(IngestionAdapter):
 
             # 1. Process Audio
             audio_out = f"{file_path}.wav"
+            used_ffmpeg_audio = False
             if has_ffmpeg:
                 proc = await asyncio.create_subprocess_exec(
                     "ffmpeg", "-y", "-i", file_path, "-vn", "-ar", "16000", "-ac", "1", "-f", "wav", audio_out,
@@ -49,42 +50,92 @@ class DemoFileAdapter(IngestionAdapter):
                     stderr=asyncio.subprocess.DEVNULL,
                 )
                 await proc.wait()
-            else:
-                # If already wav or ffmpeg not in path, use source directly
+                used_ffmpeg_audio = os.path.exists(audio_out)
+
+            if not used_ffmpeg_audio:
                 audio_out = file_path
 
             if os.path.exists(audio_out):
-                with open(audio_out, "rb") as f:
-                    audio_bytes = f.read()
-                storage_key = f"sessions/{session_id}/audio/demo_full.wav"
-                await self.storage.put_bytes(storage_key, audio_bytes, "audio/wav")
+                audio_bytes = await asyncio.to_thread(lambda p=audio_out: open(p, "rb").read())
+                ext = os.path.splitext(audio_out)[1].lower() or ".wav"
+                mime = "audio/wav" if ext == ".wav" else "audio/webm"
+                storage_key = f"sessions/{session_id}/audio/demo_full{ext}"
+                await self.storage.put_bytes(storage_key, audio_bytes, mime)
+
+                duration_ms = 60000
+                if ext == ".wav":
+                    try:
+                        import wave
+                        with wave.open(audio_out, "rb") as wf:
+                            rate = wf.getframerate() or 16000
+                            duration_ms = max(1000, int((wf.getnframes() / rate) * 1000))
+                    except Exception:
+                        pass
 
                 event = AudioChunkEvent(
                     session_id=session_id,
                     chunk_index=0,
                     timestamp_ms=0,
-                    duration_ms=60000,
+                    duration_ms=duration_ms,
                     storage_key=storage_key,
                     is_mixed_audio=True,
+                    is_final=True,
                 )
                 await redis_bus.publish_stream("stream:audio", event)
+                if used_ffmpeg_audio and os.path.exists(audio_out):
+                    os.remove(audio_out)
 
-            # 2. Process Video Frames (1 FPS sample)
-            if has_ffmpeg and file_path.lower().endswith((".mp4", ".webm", ".mov")):
+            # 2. Process Video Frames (1 FPS sample via ffmpeg or OpenCV fallback)
+            if file_path.lower().endswith((".mp4", ".webm", ".mov", ".avi")):
                 frames_dir = f"{file_path}_frames"
                 os.makedirs(frames_dir, exist_ok=True)
-                proc_v = await asyncio.create_subprocess_exec(
-                    "ffmpeg", "-y", "-i", file_path, "-vf", "fps=1,scale=640:360", f"{frames_dir}/frame_%04d.jpg",
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.DEVNULL,
-                )
-                await proc_v.wait()
+                frame_bytes_list: list[tuple[int, bytes]] = []
 
-                frame_files = sorted([f for f in os.listdir(frames_dir) if f.endswith(".jpg")])
-                for idx, fname in enumerate(frame_files):
-                    fpath = os.path.join(frames_dir, fname)
-                    with open(fpath, "rb") as f:
-                        fbytes = f.read()
+                if has_ffmpeg:
+                    proc_v = await asyncio.create_subprocess_exec(
+                        "ffmpeg", "-y", "-i", file_path, "-vf", "fps=1,scale=640:360", f"{frames_dir}/frame_%04d.jpg",
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.DEVNULL,
+                    )
+                    await proc_v.wait()
+                    frame_files = sorted(f for f in os.listdir(frames_dir) if f.endswith(".jpg"))
+                    for idx, fname in enumerate(frame_files):
+                        fpath = os.path.join(frames_dir, fname)
+                        fbytes = await asyncio.to_thread(lambda p=fpath: open(p, "rb").read())
+                        frame_bytes_list.append((idx, fbytes))
+                else:
+                    def _extract_cv2_frames(path: str) -> list[tuple[int, bytes]]:
+                        try:
+                            import cv2
+                        except ImportError:
+                            return []
+                        cap = cv2.VideoCapture(path)
+                        if not cap.isOpened():
+                            return []
+                        extracted: list[tuple[int, bytes]] = []
+                        try:
+                            fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+                            step = max(1, int(round(fps)))
+                            frame_num = 0
+                            sec_idx = 0
+                            while sec_idx < 300:
+                                ok, frame = cap.read()
+                                if not ok:
+                                    break
+                                if frame_num % step == 0:
+                                    resized = cv2.resize(frame, (640, 360))
+                                    enc_ok, buf = cv2.imencode(".jpg", resized)
+                                    if enc_ok:
+                                        extracted.append((sec_idx, buf.tobytes()))
+                                    sec_idx += 1
+                                frame_num += 1
+                        finally:
+                            cap.release()
+                        return extracted
+
+                    frame_bytes_list = await asyncio.to_thread(_extract_cv2_frames, file_path)
+
+                for idx, fbytes in frame_bytes_list:
                     f_key = f"sessions/{session_id}/frames/frame_{idx}.jpg"
                     await self.storage.put_bytes(f_key, fbytes, "image/jpeg")
 
