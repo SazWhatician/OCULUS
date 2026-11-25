@@ -26,9 +26,16 @@ class UtteranceStitcher:
         flushed: List[UtteranceEvent] = []
         pending = self._buffers.get(incoming.session_id)
 
-        # Resolve speaker role if mapped
+        # Resolve speaker role if mapped (coerce string maps from DB safely)
         if speaker_role_map and incoming.speaker_label in speaker_role_map:
-            incoming.speaker = speaker_role_map[incoming.speaker_label]
+            mapped = speaker_role_map[incoming.speaker_label]
+            if isinstance(mapped, SpeakerRole):
+                incoming.speaker = mapped
+            else:
+                try:
+                    incoming.speaker = SpeakerRole(str(mapped).strip().lower())
+                except ValueError:
+                    incoming.speaker = SpeakerRole.UNKNOWN
 
         if pending is None:
             self._buffers[incoming.session_id] = incoming
