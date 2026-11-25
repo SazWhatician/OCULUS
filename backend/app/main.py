@@ -12,9 +12,9 @@ from app.db.postgres import init_db, async_session_factory, SessionModel, Integr
 from app.db.redis_bus import redis_bus
 from app.telemetry import metrics, log_structured
 from app.api import sessions, webhooks, ws
-from app.workers.stt_worker import run_stt_worker
+from app.workers.stt_worker import run_stt_worker, get_active_stt_worker
 from app.workers.vision_worker import run_vision_worker
-from app.workers.scoring_worker import run_scoring_worker
+from app.workers.scoring_worker import run_scoring_worker, get_active_scoring_worker
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("oculus.main")
@@ -39,11 +39,23 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # Shutdown sequence
+    # Shutdown sequence: drain in-flight turns cleanly before closing Redis
     logger.info("Shutting down OCULUS Sentinel Backend...")
     stop_event.set()
-    for t in worker_tasks:
-        t.cancel()
+    if worker_tasks:
+        _, pending = await asyncio.wait(worker_tasks, timeout=5.0)
+        for t in pending:
+            t.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    stt_w = get_active_stt_worker()
+    if stt_w is not None:
+        await stt_w.flush_all_pending()
+    scoring_w = get_active_scoring_worker()
+    if scoring_w is not None:
+        await scoring_w.flush_all_pending()
+
     await redis_bus.close()
 
 
@@ -88,9 +100,13 @@ async def get_metrics():
 
 @app.get("/api/v1/media/{key:path}")
 async def serve_media(key: str):
-    """Serves locally stored keyframes and audio chunks."""
-    safe_key = key.replace("\\", "/").strip("/").replace("..", "_")
-    full_path = os.path.join(settings.LOCAL_STORAGE_DIR, safe_key)
+    """Serves locally stored keyframes and audio chunks safely."""
+    from app.db.storage import resolve_local_storage_path
+
+    try:
+        full_path = resolve_local_storage_path(key)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid media key")
     if not os.path.exists(full_path):
         raise HTTPException(status_code=404, detail="Media not found")
     return FileResponse(full_path)
