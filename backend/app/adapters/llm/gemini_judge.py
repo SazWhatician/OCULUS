@@ -389,8 +389,8 @@ class GeminiJudgeAdapter(LLMJudgeAdapter):
             "generationConfig": dict(base_payload.get("generationConfig", {})),
         }
 
-        # Legacy 2.5 models don't accept `thinkingLevel` (Gemini 3.x parameter)
-        if model_name.startswith("gemini-2.5"):
+        # Only Gemini 3.x / 4.x endpoints accept `thinkingConfig.thinkingLevel`
+        if not model_name.startswith(("gemini-3.", "gemini-4.")):
             payload["generationConfig"].pop("thinkingConfig", None)
 
         for attempt in range(self.max_retries + 1):
