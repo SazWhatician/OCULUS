@@ -40,9 +40,16 @@ from app.telemetry import metrics
 
 logger = logging.getLogger("oculus.worker.scoring")
 
+_active_scoring_worker: Optional["ScoringWorker"] = None
+
+
+def get_active_scoring_worker() -> Optional["ScoringWorker"]:
+    return _active_scoring_worker
+
+
 MAX_ACTIVE_SESSIONS = 500
 UTTERANCE_DEDUPE_WINDOW = 256
-MIN_WORDS_FOR_BASELINE = 25
+MIN_WORDS_FOR_BASELINE = 12
 DEFAULT_MAX_LLM_TURNS_PER_SESSION = 8
 DEFAULT_IDLE_FLUSH_SECONDS = 18.0
 DEFAULT_SESSION_TTL_SECONDS = 900.0
@@ -190,6 +197,9 @@ class ScoringWorker:
             elif not buf.ans_chunks and idle_for >= self.session_ttl_seconds:
                 self._buffers.pop(session_id, None)
 
+    def reset_session(self, session_id: str) -> None:
+        self._buffers.pop(session_id, None)
+
     async def aclose(self) -> None:
         await self.flush_all_pending()
         await self.llm_router.aclose()
@@ -320,7 +330,9 @@ class ScoringWorker:
         # Stage 2: Selective, budget-capped LLM Judge with security/hard-vision override
         injection_hits = ForensicReasoningToolkit.detect_injection_attempts(full_answer)
         has_hard_vision = any(
-            ev.anomaly_type.value in ("DEVICE_DETECTED", "MULTI_FACE") for ev in concurrent_vision
+            getattr(ev.anomaly_type, "value", str(ev.anomaly_type)).upper()
+            in ("DEVICE_DETECTED", "MULTI_FACE", "LIVENESS_SPOOF")
+            for ev in concurrent_vision
         )
         within_budget = buf.llm_calls_used < self.max_llm_turns_per_session
         should_invoke_llm = (
@@ -512,7 +524,9 @@ async def _idle_sweeper_loop(
 
 
 async def run_scoring_worker(stop_event: Optional[asyncio.Event] = None) -> None:
+    global _active_scoring_worker
     worker = ScoringWorker()
+    _active_scoring_worker = worker
     consumer_id = f"scoring_{socket.gethostname()}_{os.getpid()}"
     sweeper_task = asyncio.create_task(_idle_sweeper_loop(worker, stop_event))
     logger.info("ScoringWorker '%s' started consuming from 'stream:utterances'", consumer_id)
@@ -529,5 +543,10 @@ async def run_scoring_worker(stop_event: Optional[asyncio.Event] = None) -> None
     finally:
         sweeper_task.cancel()
         await asyncio.gather(sweeper_task, return_exceptions=True)
+        try:
+            await worker.aclose()
+        finally:
+            if _active_scoring_worker is worker:
+                _active_scoring_worker = None
         await worker.aclose()
         logger.info("ScoringWorker '%s' shut down cleanly.", consumer_id)
