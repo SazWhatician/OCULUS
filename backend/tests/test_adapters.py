@@ -1,23 +1,43 @@
 import pytest
 from app.schemas.contracts import AudioChunkEvent, SpeakerRole
-from app.adapters.stt.base import STTRouter
+from app.adapters.stt.base import STTRouter, STTProviderError
 from app.adapters.stt.speechmatics import SpeechmaticsAdapter
 from app.adapters.stt.groq_whisper import GroqWhisperAdapter
-from app.adapters.llm.base import FallbackLLMRouter, LLMProviderError
+from app.adapters.llm.base import (
+    FallbackLLMRouter,
+    ForensicReasoningToolkit,
+    LLMProviderError,
+)
 from app.adapters.llm.groq_judge import GroqJudgeAdapter
 from app.adapters.llm.gemini_judge import GeminiJudgeAdapter
 from app.adapters.ingestion.attendee import AttendeeBotAdapter
+from app.schemas.contracts import ConfidenceBand, LLMJudgeVerdict
+from app.services.heuristics import compute_deterministic_heuristics
 
 
 @pytest.mark.asyncio
 async def test_speechmatics_adapter_mock_diarization():
     adapter = SpeechmaticsAdapter()
-    results = await adapter.transcribe(
+    with pytest.raises(STTProviderError):
+        await adapter.transcribe(
+            audio_bytes=b"RIFF...",
+            session_id="sess_123",
+            offset_ms=0,
+            custom_vocab=["Kafka", "Redis"],
+            diarize=True,
+        )
+
+    router = STTRouter()
+    results = await router.route_and_transcribe(
+        event=AudioChunkEvent(
+            session_id="sess_123",
+            chunk_index=0,
+            timestamp_ms=0,
+            storage_key="k1",
+            is_mixed_audio=True,
+        ),
         audio_bytes=b"RIFF...",
-        session_id="sess_123",
-        offset_ms=0,
         custom_vocab=["Kafka", "Redis"],
-        diarize=True,
     )
     assert len(results) == 2
     assert results[0].speaker == SpeakerRole.INTERVIEWER
@@ -28,11 +48,25 @@ async def test_speechmatics_adapter_mock_diarization():
 @pytest.mark.asyncio
 async def test_groq_whisper_adapter_mock():
     adapter = GroqWhisperAdapter()
-    results = await adapter.transcribe(
+    with pytest.raises(STTProviderError):
+        await adapter.transcribe(
+            audio_bytes=b"RIFF...",
+            session_id="sess_123",
+            offset_ms=1000,
+            diarize=False,
+        )
+
+    router = STTRouter()
+    results = await router.route_and_transcribe(
+        event=AudioChunkEvent(
+            session_id="sess_123",
+            chunk_index=0,
+            timestamp_ms=1000,
+            storage_key="k2",
+            is_mixed_audio=False,
+            speaker_hint=SpeakerRole.CANDIDATE,
+        ),
         audio_bytes=b"RIFF...",
-        session_id="sess_123",
-        offset_ms=1000,
-        diarize=False,
     )
     assert len(results) == 1
     assert results[0].start_ms == 1000
@@ -133,3 +167,63 @@ def test_attendee_hmac_verification():
 
     assert adapter.verify_webhook_signature(valid_sig, body) is True
     assert adapter.verify_webhook_signature("invalid_signature", body) is False
+
+
+def test_audio_only_high_risk_and_paraphrased_quote_verification():
+    answer = (
+        "It is crucial to note that optimizing distributed database queries requires a multifaceted approach. "
+        "Firstly, one must delve into execution plans using EXPLAIN ANALYZE to identify slow table scans. "
+        "Secondly, caching architectures play a pivotal role in decoupling read-heavy traffic. "
+        "In summary, a comprehensive approach ensures optimal throughput and fosters synergy across services."
+    )
+    heuristics = compute_deterministic_heuristics(
+        answer_text=answer,
+        duration_ms=22_000,
+        ttfs_latency_ms=4_500,
+    )
+    assert heuristics.concurrent_vision_flags == 0
+    assert heuristics.deterministic_risk >= 45.0
+
+    # Ellipsis-paraphrased quote resolves back to an exact substring inside answer
+    paraphrased_verdict = LLMJudgeVerdict(
+        answer_id="ans_audio_high",
+        suspicion_score=84.0,
+        confidence_band=ConfidenceBand.HIGH,
+        reasoning_signals=["Dense synthetic prose markers."],
+        verbatim_evidence_quotes=[
+            "optimizing distributed database queries ... execution plans using EXPLAIN ANALYZE"
+        ],
+    )
+    calibrated = ForensicReasoningToolkit.sanitize_and_calibrate_verdict(
+        verdict=paraphrased_verdict,
+        original_answer=answer,
+        heuristics=heuristics,
+        injection_hits=[],
+    )
+    assert calibrated.suspicion_score >= 65.0
+    assert len(calibrated.verbatim_evidence_quotes) == 1
+    assert calibrated.verbatim_evidence_quotes[0] in answer
+
+    # Even if quotes are empty, strong audio heuristics exempt turn from the 58.0 cap
+    no_quote_verdict = LLMJudgeVerdict(
+        answer_id="ans_audio_noquote",
+        suspicion_score=78.0,
+        confidence_band=ConfidenceBand.MEDIUM,
+        reasoning_signals=["Multiple synthetic markers corroborated by Stage 1."],
+        verbatim_evidence_quotes=[],
+    )
+    calibrated_no_quote = ForensicReasoningToolkit.sanitize_and_calibrate_verdict(
+        verdict=no_quote_verdict,
+        original_answer=answer,
+        heuristics=heuristics,
+        injection_hits=[],
+    )
+    assert calibrated_no_quote.suspicion_score >= 65.0
+
+    # Minor word-drop paraphrase still recovers verbatim source substring via sliding window
+    sliding_quotes = ForensicReasoningToolkit.verify_verbatim_quotes(
+        ["optimizing distributed queries requires multifaceted approach"],
+        answer,
+    )
+    assert len(sliding_quotes) == 1
+    assert sliding_quotes[0] in answer
