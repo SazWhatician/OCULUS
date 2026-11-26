@@ -1,6 +1,7 @@
 import math
 import re
 import statistics
+import zlib
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -9,11 +10,10 @@ from app.schemas.contracts import (
     CandidateBaseline,
     HeuristicScores,
     VisionAnomalyEvent,
-    VisionAnomalyType,
 )
 
 # ---------------------------------------------------------------------------
-# Forensic Linguistic & Psycholinguistic Regex Banks (<1ms, Zero ML Deps)
+# Forensic Linguistic & Psycholinguistic Regex Banks (<2ms, Zero ML Deps)
 # ---------------------------------------------------------------------------
 
 VOCAL_HESITATION_RE = re.compile(
@@ -57,6 +57,21 @@ CONCRETE_METRIC_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Question-intent classifiers (prevents penalizing conceptual answers for lacking "I/my")
+EXPERIENTIAL_Q_RE = re.compile(
+    r"\b(?:tell\s+me\s+about\s+a\s+time|walk\s+me\s+through\s+(?:a|your)|"
+    r"in\s+your\s+(?:experience|previous|last|current)|have\s+you\s+ever|"
+    r"how\s+did\s+you|what\s+did\s+you|project\s+you\s+(?:built|led|worked)|"
+    r"bug\s+you\s+(?:fixed|debugged)|challenge\s+you\s+faced)\b",
+    re.IGNORECASE,
+)
+CONCEPTUAL_Q_RE = re.compile(
+    r"\b(?:what\s+(?:is|are)\s+(?:a|an|the)?|explain\s+(?:how|what|the)|"
+    r"define\s+|difference\s+between|compare\s+|how\s+does\s+(?:a|an|the)?|"
+    r"why\s+does\s+|time\s+complexity|cap\s+theorem|acid\s+properties)\b",
+    re.IGNORECASE,
+)
+
 # Tier A: High-precision LLM prose artifacts rarely spoken spontaneously
 TIER_A_AI_TELLS: Tuple[Tuple[re.Pattern[str], str, float], ...] = (
     (re.compile(r"\bdelve\s+into\b", re.I), "delve into", 12.0),
@@ -85,7 +100,7 @@ TIER_B_AI_TELLS: Tuple[Tuple[re.Pattern[str], str, float], ...] = (
     (re.compile(r"\blet\s+me\s+break\s+(?:this|that|it)\s+down\b", re.I), "break this down opener", 4.0),
 )
 
-# Verbalized Markdown list / triad templates (catches stealth ChatGPT output without clichés)
+# Verbalized Markdown list / triad templates (catches stealth ChatGPT output without cliches)
 VERBAL_ENUMERATION_RE = re.compile(
     r"(?:\b(?:first(?:ly)?|number\s+one)\b.{10,240}\b(?:second(?:ly)?|number\s+two)\b"
     r"(?:.{10,240}\b(?:third(?:ly)?|number\s+three|finally)\b)?)",
@@ -97,10 +112,36 @@ ESSAY_FRAMING_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Casual-LLM syntactic patterns that survive "answer casually without delve/synergy" prompts
+DANGLING_PARTICIPLE_RE = re.compile(
+    r",\s*(?:ensuring|allowing|preventing|reducing|improving|enabling|avoiding|"
+    r"minimizing|maximizing|making\s+sure|helping\s+(?:to\s+)?[a-z]+)\b",
+    re.IGNORECASE,
+)
+CONTRASTIVE_FRAME_RE = re.compile(
+    r"\b(?:it'?s\s+not\s+(?:just|only)\s+about|instead\s+of\s+just|"
+    r"rather\s+than\s+(?:just|simply)|that\s+way[,\s]+(?:you|we|it)|"
+    r"the\s+(?:main|key|real)\s+(?:thing|benefit|reason|trade[- ]?off)\s+(?:here\s+)?is|"
+    r"at\s+the\s+end\s+of\s+the\s+day)\b",
+    re.IGNORECASE,
+)
+CASUAL_OPENER_STALL_RE = re.compile(
+    r"^(?:yeah|so|well|honestly|basically|right|okay|sure|good\s+question|um+|uh+)[,\s]+",
+    re.IGNORECASE,
+)
+SENTENCE_LEADING_FILLER_RE = re.compile(
+    r"^(?:(?:yeah|so|well|right|okay|honestly|sure)[,\s]+)*"
+    r"(?:um+|uh+|er+m?|hm+m?|ah+|you\s+know|i\s+mean|sort\s+of|kind\s+of|basically|literally|like)"
+    r"(?:[,\s]+|$)",
+    re.IGNORECASE,
+)
+
 FIRST_PERSON_RE = re.compile(r"\b(i|me|my|mine|myself|we|us|our|ours|ourselves)\b", re.I)
 WORD_TOKEN_RE = re.compile(r"[a-z0-9']+", re.I)
 ALPHA_WORD_RE = re.compile(r"[a-z]+", re.I)
+VOWEL_GROUP_RE = re.compile(r"[aeiouy]+", re.I)
 SENTENCE_SPLIT_RE = re.compile(r"[.!?]+(?:\s+|$)")
+NON_WORD_CHAR_RE = re.compile(r"[^a-z0-9']+", re.I)
 
 # STT-Resilient Security Scanner: catches spoken numbers ("zero") and word-level overrides
 INJECTION_PATTERNS: Tuple[re.Pattern[str], ...] = (
@@ -128,12 +169,27 @@ STOPWORDS = frozenset({
     "it", "they", "them", "their", "so", "not", "no", "yes", "as", "very", "also",
 })
 
+# Grammatical function-word classes for length-invariant stylometric entropy
+_FUNC_CLASSES: Tuple[frozenset[str], ...] = (
+    frozenset({"the", "a", "an", "this", "that", "these", "those"}),
+    frozenset({"in", "on", "at", "by", "for", "with", "to", "from", "of", "into", "through", "over"}),
+    frozenset({"and", "or", "but", "so", "because", "while", "although", "if", "when", "whereas"}),
+    frozenset({"i", "me", "my", "we", "us", "our", "you", "your", "they", "them", "their", "it"}),
+    frozenset({"is", "are", "was", "were", "be", "been", "have", "has", "had", "can", "could", "would", "should", "will"}),
+)
+
+# Log-spaced inter-word pause bins (ms) for Shannon cadence entropy
+_PAUSE_BIN_EDGES = (140, 260, 450, 800, 1_400)
+
 # Population priors for Empirical Bayes shrinkage when Q0 sample is short
 PRIOR_WPM = 135.0
 PRIOR_MAD_WPM = 18.0
 PRIOR_DISFLUENCY_RATE = 3.0
 PRIOR_TTFS_MS = 1200.0
 SHRINKAGE_FULL_WORDS = 60.0
+
+VISION_BURST_WINDOW_MS = 10_000
+VISION_BURST_DECAY = 0.45
 
 VISION_BASE_WEIGHTS: Dict[str, float] = {
     "DEVICE_DETECTED": 24.0,
@@ -150,9 +206,12 @@ CATEGORY_FALLBACK_MAP: Dict[str, str] = {
     "multi-face detection": "MULTI_FACE",
     "liveness / spoof risk": "LIVENESS_SPOOF",
     "frozen video feed": "LIVENESS_SPOOF",
+    "candidate identity substitution": "LIVENESS_SPOOF",
     "camera occlusion": "CAMERA_OCCLUSION",
     "face absent from frame": "CAMERA_OCCLUSION",
     "gaze deviation (looking away)": "GAZE_DEVIATION",
+    "split-angle off-screen focus": "GAZE_DEVIATION",
+    "repetitive off-screen peek pattern": "GAZE_DEVIATION",
     "teleprompter reading pattern": "GAZE_DEVIATION",
     "head pose shift": "HEAD_PITCH_DOWN",
 }
@@ -173,32 +232,105 @@ HIGH_SEVERITY_VISION_TYPES = frozenset({
 class _StylometricProfile:
     word_count: int
     mean_word_len: float
-    long_word_ratio: float      # Share of alpha words >= 8 chars
-    lexical_density: float      # Share of non-stopword content tokens
-    contraction_rate: float     # Contractions per 100 words
+    long_word_ratio: float          # Share of alpha words >= 8 chars
+    lexical_density: float          # Share of non-stopword content tokens
+    contraction_rate: float         # Contractions per 100 words
+    mattr: float                    # Length-invariant Moving-Average Type-Token Ratio (w=25)
+    mean_syllables: float           # Approximate syllables per word
+    func_word_entropy: float        # Normalized Shannon entropy over 5 function-word classes
 
 
 _MAX_STYLE_PROFILES = 500
 _STYLE_PROFILES: "OrderedDict[str, _StylometricProfile]" = OrderedDict()
 
 
+def _estimate_syllables(word: str) -> int:
+    if len(word) <= 3:
+        return 1
+    groups = VOWEL_GROUP_RE.findall(word)
+    count = len(groups)
+    if word.endswith("e") and not word.endswith("le") and count > 1:
+        count -= 1
+    return max(1, count)
+
+
+def _compute_mattr(words: Sequence[str], window: int = 25) -> float:
+    """O(N) length-invariant Moving-Average Type-Token Ratio."""
+    n = len(words)
+    if n == 0:
+        return 0.0
+    if n <= window:
+        return len(set(words)) / float(n)
+
+    counts: Dict[str, int] = {}
+    unique = 0
+    for i in range(window):
+        w = words[i]
+        c = counts.get(w, 0)
+        if c == 0:
+            unique += 1
+        counts[w] = c + 1
+
+    ttr_sum = unique / float(window)
+    num_windows = n - window + 1
+    for i in range(window, n):
+        out_w = words[i - window]
+        counts[out_w] -= 1
+        if counts[out_w] == 0:
+            unique -= 1
+        in_w = words[i]
+        c_in = counts.get(in_w, 0)
+        if c_in == 0:
+            unique += 1
+        counts[in_w] = c_in + 1
+        ttr_sum += unique / float(window)
+
+    return ttr_sum / float(num_windows)
+
+
+def _compute_func_word_entropy(words: Sequence[str]) -> float:
+    bins = [0] * len(_FUNC_CLASSES)
+    total = 0
+    for w in words:
+        for idx, cls_set in enumerate(_FUNC_CLASSES):
+            if w in cls_set:
+                bins[idx] += 1
+                total += 1
+                break
+    if total < 6:
+        return 0.85
+    entropy = 0.0
+    for c in bins:
+        if c > 0:
+            p = c / float(total)
+            entropy -= p * math.log(p)
+    return entropy / math.log(len(_FUNC_CLASSES))
+
+
 def _extract_stylometric_profile(text: str) -> _StylometricProfile:
     alpha_words = ALPHA_WORD_RE.findall((text or "").lower())
     n = len(alpha_words)
     if n == 0:
-        return _StylometricProfile(0, 4.4, 0.12, 0.48, 2.0)
+        return _StylometricProfile(0, 4.4, 0.12, 0.48, 2.0, 0.72, 1.45, 0.85)
 
-    mean_len = sum(len(w) for w in alpha_words) / n
-    long_ratio = sum(1 for w in alpha_words if len(w) >= 8) / n
-    content_ratio = sum(1 for w in alpha_words if len(w) >= 3 and w not in STOPWORDS) / n
+    mean_len = sum(len(w) for w in alpha_words) / float(n)
+    long_ratio = sum(1 for w in alpha_words if len(w) >= 8) / float(n)
+    content_ratio = sum(1 for w in alpha_words if len(w) >= 3 and w not in STOPWORDS) / float(n)
     contractions = len(CONTRACTION_RE.findall(text))
-    contraction_rate = (contractions / n) * 100.0
+    contraction_rate = (contractions / float(n)) * 100.0
+    mattr = _compute_mattr(alpha_words, window=25)
+    mean_syll = sum(_estimate_syllables(w) for w in alpha_words) / float(n)
+    func_ent = _compute_func_word_entropy(alpha_words)
+
     return _StylometricProfile(
         word_count=n,
         mean_word_len=mean_len,
         long_word_ratio=long_ratio,
         lexical_density=content_ratio,
         contraction_rate=contraction_rate,
+        mattr=mattr,
+        mean_syllables=mean_syll,
+        func_word_entropy=func_ent,
     )
 
 
@@ -246,6 +378,43 @@ def _extract_word_timing(item: Any) -> Optional[Tuple[int, int]]:
     return (s_ms, e_ms)
 
 
+def _extract_word_token_timing(item: Any) -> Optional[Tuple[str, int, int]]:
+    """Extracts (normalized_word, start_ms, end_ms) from WordTiming models or dicts."""
+    if isinstance(item, dict):
+        word = item.get("word")
+        start = item.get("start_ms")
+        end = item.get("end_ms")
+    else:
+        word = getattr(item, "word", None)
+        start = getattr(item, "start_ms", None)
+        end = getattr(item, "end_ms", None)
+    if not word or start is None or end is None:
+        return None
+    try:
+        s_ms, e_ms = int(start), int(end)
+    except (TypeError, ValueError):
+        return None
+    clean_w = NON_WORD_CHAR_RE.sub("", str(word).lower())
+    if not clean_w or s_ms < 0 or e_ms < s_ms:
+        return None
+    return (clean_w, s_ms, e_ms)
+
+
+def _derive_gaps_from_word_timings(word_timings: Optional[Sequence[Any]]) -> Optional[List[int]]:
+    if not word_timings:
+        return None
+    spans = [pair for item in word_timings if (pair := _extract_word_timing(item)) is not None]
+    if len(spans) < 2:
+        return None
+    spans.sort(key=lambda pair: pair[0])
+    gaps = [
+        spans[i][0] - spans[i - 1][1]
+        for i in range(1, len(spans))
+        if spans[i][0] > spans[i - 1][1]
+    ]
+    return gaps or None
+
+
 def _count_natural_disfluencies(text: str) -> Tuple[int, int]:
     """Returns (total_disfluency_count, self_repair_and_stutter_count)."""
     vocal = len(VOCAL_HESITATION_RE.findall(text))
@@ -271,6 +440,18 @@ def _length_confidence(word_count: int, min_words: int, full_words: int, min_sca
     if word_count >= full_words or full_words <= min_words:
         return 1.0
     return min_scale + (1.0 - min_scale) * ((word_count - min_words) / (full_words - min_words))
+
+
+def _classify_question_intent(question_text: Optional[str]) -> str:
+    """Returns 'EXPERIENTIAL', 'CONCEPTUAL', or 'NEUTRAL' to prevent conceptual ownership bias."""
+    q = (question_text or "").strip()
+    if not q or q.lower() == "general question":
+        return "NEUTRAL"
+    if EXPERIENTIAL_Q_RE.search(q):
+        return "EXPERIENTIAL"
+    if CONCEPTUAL_Q_RE.search(q):
+        return "CONCEPTUAL"
+    return "NEUTRAL"
 
 
 def _compute_real_wpm_windows(
@@ -303,27 +484,55 @@ def _compute_real_wpm_windows(
     return wpms
 
 
-def _compute_robust_cadence_cv(inter_word_gaps: Optional[Sequence[int]]) -> Tuple[float, int, float]:
+def _compute_pause_entropy(pauses: Sequence[int]) -> float:
+    """Normalized Shannon entropy [0..1] over 6 log-spaced inter-word pause bins."""
+    n = len(pauses)
+    if n < 5:
+        return 0.85
+    bins = [0] * (len(_PAUSE_BIN_EDGES) + 1)
+    for g in pauses:
+        placed = False
+        for idx, edge in enumerate(_PAUSE_BIN_EDGES):
+            if g < edge:
+                bins[idx] += 1
+                placed = True
+                break
+        if not placed:
+            bins[-1] += 1
+
+    entropy = 0.0
+    for c in bins:
+        if c > 0:
+            p = c / float(n)
+            entropy -= p * math.log(p)
+    return entropy / math.log(len(bins))
+
+
+def _compute_robust_cadence_cv(
+    inter_word_gaps: Optional[Sequence[int]],
+) -> Tuple[float, int, float, float]:
     """
-    Computes trimmed pause Coefficient of Variation (teleprompter uniformity)
-    and early-vs-late pause acceleration ratio ("stall-then-firehose" streaming signature).
-    Returns (cv, valid_pause_count, stall_to_flow_ratio).
+    Computes:
+      1. Trimmed pause Coefficient of Variation (teleprompter uniformity)
+      2. Valid pause sample count
+      3. Early-vs-body pause acceleration ratio (stall-then-firehose signature)
+      4. Normalized Shannon pause entropy (low entropy confirms metronomic reading)
     """
     if not inter_word_gaps:
-        return (0.75, 0, 1.0)
+        return (0.75, 0, 1.0, 0.85)
 
     ordered_valid = [int(g) for g in inter_word_gaps if 60 <= int(g) <= 2_500]
     n = len(ordered_valid)
     if n < 5:
-        return (0.75, n, 1.0)
+        return (0.75, n, 1.0, 0.85)
 
     sorted_pauses = sorted(ordered_valid)
     trim = max(1, n // 10) if n >= 10 else 0
     core = sorted_pauses[trim : n - trim] if trim else sorted_pauses
     mean_gap = statistics.fmean(core)
     cv = (statistics.pstdev(core) / mean_gap) if mean_gap > 0.0 else 0.75
+    pause_entropy = _compute_pause_entropy(ordered_valid)
 
-    # Compare opening 25% pauses against body 75% pauses (detects waiting for LLM token stream)
     stall_to_flow = 1.0
     if n >= 8:
         split = max(2, n // 4)
@@ -332,14 +541,208 @@ def _compute_robust_cadence_cv(inter_word_gaps: Optional[Sequence[int]]) -> Tupl
         if body_mean > 0.0:
             stall_to_flow = early_mean / body_mean
 
-    return (cv, n, stall_to_flow)
+    return (cv, n, stall_to_flow, pause_entropy)
+
+
+def _compute_cognitive_pause_flatness(
+    word_timings: Optional[Sequence[Any]],
+    curr_wpm: float,
+    curr_disfluency_rate: float,
+) -> Tuple[float, Optional[str]]:
+    """
+    Reading-vs-thinking physics: spontaneous speakers pause longer before complex/rare
+    technical words during lexical retrieval. Reading casual LLM text removes retrieval
+    latency, flattening pre-complex-word gaps relative to simple function words.
+    ESL/thoughtful speakers pause MORE before complex words -> 0.0 penalty.
+    """
+    if not word_timings or curr_wpm < 130.0 or curr_disfluency_rate >= 1.5:
+        return (0.0, None)
+
+    parsed = [
+        row for item in word_timings
+        if (row := _extract_word_token_timing(item)) is not None
+    ]
+    if len(parsed) < 40:
+        return (0.0, None)
+    parsed.sort(key=lambda r: r[1])
+
+    complex_gaps: List[int] = []
+    simple_gaps: List[int] = []
+    for i in range(1, len(parsed)):
+        gap = parsed[i][1] - parsed[i - 1][2]
+        if gap < 0 or gap > 2_500:
+            continue
+        w = parsed[i][0]
+        if len(w) >= 7 and w not in STOPWORDS:
+            complex_gaps.append(gap)
+        elif len(w) <= 4 or w in STOPWORDS:
+            simple_gaps.append(gap)
+
+    if len(complex_gaps) < 6 or len(simple_gaps) < 10:
+        return (0.0, None)
+
+    mean_c = statistics.fmean(complex_gaps)
+    mean_s = statistics.fmean(simple_gaps)
+    hesitation_share = sum(1 for g in complex_gaps if g >= 180) / float(len(complex_gaps))
+    gap_delta = mean_c - mean_s
+
+    if gap_delta <= 15.0 and hesitation_share < 0.10:
+        flat_pts = _linear_ramp(15.0 - gap_delta, low=0.0, high=40.0, max_points=7.0)
+        hes_pts = _linear_ramp(0.10 - hesitation_share, low=0.0, high=0.10, max_points=4.0)
+        pts = min(11.0, flat_pts + hes_pts)
+        if pts >= 4.0:
+            return (
+                pts,
+                (
+                    f"Flat pre-complex-word reading cadence "
+                    f"(complex={int(mean_c)}ms vs simple={int(mean_s)}ms, hes={int(hesitation_share * 100)}%)"
+                ),
+            )
+    return (0.0, None)
+
+
+def _compute_intraturn_bifurcation(
+    text: str,
+    tokens: Sequence[str],
+    word_count: int,
+) -> Tuple[float, Optional[str]]:
+    """
+    Baseline-free intra-turn 'stall-then-read' detector: catches improvised or prompt-injected
+    opening fillers followed by an abrupt shift into zero-disfluency, denser body prose.
+    """
+    if word_count < 50:
+        return (0.0, None)
+
+    split_idx = max(10, int(word_count * 0.25))
+    if (word_count - split_idx) < 35:
+        return (0.0, None)
+
+    head_tokens = tokens[:split_idx]
+    body_tokens = tokens[split_idx:]
+    head_text = " ".join(head_tokens)
+    body_text = " ".join(body_tokens)
+
+    head_disf, _ = _count_natural_disfluencies(head_text)
+    body_disf, body_repairs = _count_natural_disfluencies(body_text)
+    if body_repairs >= 1:
+        return (0.0, None)
+
+    head_rate = (head_disf / float(len(head_tokens))) * 100.0
+    body_rate = (body_disf / float(len(body_tokens))) * 100.0
+    has_casual_opener = bool(CASUAL_OPENER_STALL_RE.search(text.strip()))
+
+    head_alpha = ALPHA_WORD_RE.findall(head_text.lower())
+    body_alpha = ALPHA_WORD_RE.findall(body_text.lower())
+    head_len = (sum(len(w) for w in head_alpha) / float(len(head_alpha))) if head_alpha else 4.4
+    body_len = (sum(len(w) for w in body_alpha) / float(len(body_alpha))) if body_alpha else 4.4
+    len_jump = body_len - head_len
+
+    if (head_rate >= 5.0 or (has_casual_opener and head_disf >= 1)) and body_rate <= 0.6:
+        pts = 4.5 + _linear_ramp(len_jump, low=0.25, high=0.95, max_points=5.5)
+        if pts >= 5.0:
+            return (
+                min(10.0, pts),
+                (
+                    f"Intra-turn stall-then-read shift "
+                    f"(opener disfluency={head_rate:.1f}/100w -> body={body_rate:.1f}/100w, word-len {len_jump:+.2f})"
+                ),
+            )
+    return (0.0, None)
+
+
+def _compute_stealth_prose_signals(
+    text: str,
+    word_count: int,
+    disfluency_count: int,
+    self_repair_count: int,
+) -> Tuple[float, List[str]]:
+    """
+    Catches cliche-free 'casual ChatGPT' answers via convergence of >= 2 independent cues:
+      1. Uniform sliding-window information density + flat zlib local compression ratio
+      2. Abnormal anti-repetition (high unique content-word turnover across 50+ words)
+      3. Casual-LLM syntactic templates (dangling participial clauses, rhetorical contrasts)
+      4. Boundary-only synthetic fillers (all fillers occur at sentence starts, zero mid-clause)
+    """
+    if word_count < 50:
+        return (0.0, [])
+
+    alpha = ALPHA_WORD_RE.findall(text.lower())
+    n_alpha = len(alpha)
+    if n_alpha < 45:
+        return (0.0, [])
+
+    sub_hits = 0
+    raw_pts = 0.0
+    cues: List[str] = []
+
+    # 1. Sliding-window content density & local zlib compression flatness
+    win = 15
+    step = 5
+    densities: List[float] = []
+    zlib_ratios: List[float] = []
+    for start in range(0, n_alpha - win + 1, step):
+        chunk = alpha[start : start + win]
+        densities.append(sum(1 for w in chunk if len(w) >= 3 and w not in STOPWORDS) / float(win))
+        raw_bytes = " ".join(chunk).encode("utf-8")
+        zlib_ratios.append(len(zlib.compress(raw_bytes, level=6)) / float(max(len(raw_bytes), 1)))
+
+    if len(densities) >= 6:
+        mean_d = statistics.fmean(densities)
+        cv_d = statistics.pstdev(densities) / max(mean_d, 1e-4)
+        cv_z = statistics.pstdev(zlib_ratios) / max(statistics.fmean(zlib_ratios), 1e-4)
+        if mean_d >= 0.48 and cv_d <= 0.13 and cv_z <= 0.085:
+            sub_hits += 1
+            raw_pts += 5.0
+            cues.append(f"flat info density (CV={cv_d:.2f}, zCV={cv_z:.3f})")
+
+    # 2. Anti-repetition / high lexical turnover (humans re-anchor on repeated nouns; LLMs diversify)
+    content_words = [w for w in alpha if len(w) >= 4 and w not in STOPWORDS]
+    if len(content_words) >= 28:
+        unique_ratio = len(set(content_words)) / float(len(content_words))
+        if unique_ratio >= 0.86:
+            sub_hits += 1
+            raw_pts += _linear_ramp(unique_ratio, low=0.84, high=0.95, max_points=5.0)
+            cues.append(f"low lexical recurrence ({int(unique_ratio * 100)}% unique content)")
+
+    # 3. Casual-LLM syntactic templates (survive banned-word prompts)
+    part_hits = len(DANGLING_PARTICIPLE_RE.findall(text))
+    contrast_hits = len(CONTRASTIVE_FRAME_RE.findall(text))
+    if (part_hits + contrast_hits) >= 2:
+        sub_hits += 1
+        raw_pts += min(6.0, (part_hits * 2.5) + (contrast_hits * 2.5))
+        cues.append(f"casual-LLM syntax ({part_hits} participial, {contrast_hits} contrastive)")
+
+    # 4. Boundary-only synthetic disfluencies (zero mid-clause hesitation after stripping sentence openers)
+    if 1 <= disfluency_count <= 3 and self_repair_count == 0:
+        sents = [s.strip() for s in SENTENCE_SPLIT_RE.split(text) if s.strip()]
+        if len(sents) >= 3:
+            mid_clause_disf = 0
+            stripped_any = False
+            for s in sents:
+                body = SENTENCE_LEADING_FILLER_RE.sub("", s)
+                if len(body) < len(s):
+                    stripped_any = True
+                rem_disf, _ = _count_natural_disfluencies(body)
+                mid_clause_disf += rem_disf
+            if stripped_any and mid_clause_disf == 0:
+                sub_hits += 1
+                raw_pts += 4.5
+                cues.append("sentence-boundary-only fillers (zero mid-clause hesitation)")
+
+    if sub_hits < 2:
+        return (0.0, [])
+
+    conf_scale = _length_confidence(word_count, min_words=50, full_words=85, min_scale=0.65)
+    scaled = min(15.0, raw_pts) * conf_scale
+    if scaled < 5.0:
+        return (0.0, [])
+    return (scaled, cues)
 
 
 def _compute_sentence_uniformity(text: str) -> Tuple[Optional[float], int]:
     """
     Detects written-essay rhythmic uniformity across punctuated sentences.
-    Returns (sentence_len_cv, sentence_count). Safely returns (None, count)
-    when STT output lacks punctuation so raw transcripts are never penalized.
+    Safely returns (None, count) when STT output lacks punctuation.
     """
     raw_sents = [s.strip() for s in SENTENCE_SPLIT_RE.split(text) if s.strip()]
     lengths = [len(WORD_TOKEN_RE.findall(s)) for s in raw_sents]
@@ -360,7 +763,7 @@ def _compute_stylometric_shift(
 ) -> Tuple[float, Optional[str]]:
     """
     Detects stealth register jumps (casual Q0 speaker suddenly reciting dense academic LLM prose).
-    Relative to the candidate's own Q0 baseline so naturally formal/academic speakers are never penalized.
+    Strictly relative to the candidate's own Q0 baseline so naturally formal speakers pay 0 penalty.
     """
     if base_profile is None or base_profile.word_count < 30 or word_count < 40:
         return (0.0, None)
@@ -368,24 +771,35 @@ def _compute_stylometric_shift(
     len_delta = curr_profile.mean_word_len - base_profile.mean_word_len
     long_word_delta = curr_profile.long_word_ratio - base_profile.long_word_ratio
     density_delta = curr_profile.lexical_density - base_profile.lexical_density
+    mattr_delta = curr_profile.mattr - base_profile.mattr
+    syll_delta = curr_profile.mean_syllables - base_profile.mean_syllables
+    ent_shift = abs(curr_profile.func_word_entropy - base_profile.func_word_entropy)
     contraction_collapse = (
         base_profile.contraction_rate >= 2.0 and curr_profile.contraction_rate <= 0.2
     )
 
     score = 0.0
-    score += _linear_ramp(len_delta, low=0.55, high=1.35, max_points=6.0)
-    score += _linear_ramp(long_word_delta, low=0.07, high=0.18, max_points=6.0)
-    score += _linear_ramp(density_delta, low=0.08, high=0.20, max_points=4.0)
+    score += _linear_ramp(len_delta, low=0.55, high=1.35, max_points=5.5)
+    score += _linear_ramp(long_word_delta, low=0.07, high=0.18, max_points=5.5)
+    score += _linear_ramp(density_delta, low=0.08, high=0.20, max_points=3.5)
+    score += _linear_ramp(mattr_delta, low=0.08, high=0.18, max_points=3.5)
+    score += _linear_ramp(syll_delta, low=0.22, high=0.55, max_points=3.5)
+    if ent_shift >= 0.14 and (len_delta >= 0.45 or mattr_delta >= 0.07):
+        score += 2.0
     if contraction_collapse and (len_delta >= 0.45 or long_word_delta >= 0.06):
         score += 3.5
 
-    scaled = min(score, 15.0) * _length_confidence(word_count, min_words=40, full_words=75, min_scale=0.50)
+    conf_scale = _length_confidence(word_count, min_words=40, full_words=75, min_scale=0.50)
+    scaled = min(score, 16.0) * conf_scale
     if scaled < 5.0:
         return (0.0, None)
 
     return (
         scaled,
-        f"Sharp academic register shift vs Q0 (avg word len {len_delta:+.2f}, long-word ratio {long_word_delta:+.0%})",
+        (
+            f"Sharp academic register shift vs Q0 "
+            f"(word len {len_delta:+.2f}, long-word {long_word_delta:+.0%}, MATTR {mattr_delta:+.2f})"
+        ),
     )
 
 
@@ -395,13 +809,18 @@ def _compute_exculpatory_credit(
     self_repair_count: int,
     vision_risk: float,
     injection_detected: bool,
+    tier_a_hits: int,
+    total_tell_hits: int,
+    stealth_convergence: bool = False,
 ) -> float:
     """
-    Computes bounded authenticity credit for hard-to-fake live human signals:
-    spontaneous cognitive self-repairs and grounded engineering war-story specifics.
-    Disabled when hard vision proof or prompt injection is present.
+    Bounded authenticity credit for hard-to-fake live human signals (spontaneous self-repairs
+    and grounded production war stories). Attenuated when strong LLM tells or multi-cue
+    stealth prose convergence are present.
     """
     if injection_detected or vision_risk >= 15.0 or word_count < 25:
+        return 0.0
+    if tier_a_hits >= 2 or total_tell_hits >= 4:
         return 0.0
 
     credit = 0.0
@@ -414,9 +833,11 @@ def _compute_exculpatory_credit(
     metric_hits = len(CONCRETE_METRIC_RE.findall(text))
     fp_hits = len(FIRST_PERSON_RE.findall(text))
 
-    # Concrete metrics + incident ownership ("I debugged... p99 dropped to 38ms")
     if fp_hits >= 2 and (scar_hits >= 1 or metric_hits >= 1):
         credit += min(8.0, (scar_hits * 3.0) + (metric_hits * 2.5))
+
+    if tier_a_hits == 1 or total_tell_hits >= 2 or stealth_convergence:
+        credit *= 0.45
 
     return min(credit, 14.0)
 
@@ -434,18 +855,21 @@ def _compute_question_mirroring_ratio(question_text: Optional[str], answer_token
         return 0.0
 
     opening_words = {w.lower() for w in answer_tokens[:25]}
-    return len(q_words & opening_words) / len(q_words)
+    return len(q_words & opening_words) / float(len(q_words))
 
 
 def _score_vision_events(events: Optional[Sequence[VisionAnomalyEvent]]) -> Tuple[float, int, List[str]]:
+    """Confidence-, duration-, and burst-declustered concurrent vision risk (capped at 30.0)."""
     if not events:
         return (0.0, 0, [])
 
+    ordered = sorted(events, key=lambda e: int(getattr(e, "timestamp_ms", 0) or 0))
     total_risk = 0.0
     notes: List[str] = []
     high_severity_types: set[str] = set()
+    last_ts_by_type: Dict[str, int] = {}
 
-    for ev in events:
+    for ev in ordered:
         raw_type = getattr(ev, "anomaly_type", None)
         type_name = getattr(raw_type, "value", str(raw_type)).strip().upper() if raw_type is not None else ""
         if not type_name:
@@ -461,20 +885,30 @@ def _score_vision_events(events: Optional[Sequence[VisionAnomalyEvent]]) -> Tupl
         else:
             dur_scale = 1.0
 
+        ts_ms = int(getattr(ev, "timestamp_ms", 0) or 0)
+        prev_ts = last_ts_by_type.get(type_name)
+        burst_scale = (
+            VISION_BURST_DECAY
+            if (prev_ts is not None and ts_ms > 0 and (ts_ms - prev_ts) <= VISION_BURST_WINDOW_MS)
+            else 1.0
+        )
+        if ts_ms > 0:
+            last_ts_by_type[type_name] = ts_ms
+
         if type_name in HIGH_SEVERITY_VISION_TYPES:
             high_severity_types.add(type_name)
 
-        total_risk += base_weight * conf * dur_scale
+        total_risk += base_weight * conf * dur_scale * burst_scale
 
     capped_risk = min(total_risk, 30.0)
     if high_severity_types:
         notes.append(
             f"High-severity concurrent vision telemetry ({', '.join(sorted(high_severity_types))})"
         )
-    elif len(events) > 0:
-        notes.append(f"{len(events)} concurrent sustained gaze/posture flags")
+    elif len(ordered) > 0:
+        notes.append(f"{len(ordered)} concurrent sustained gaze/posture flags")
 
-    return (capped_risk, len(events), notes)
+    return (capped_risk, len(ordered), notes)
 
 
 # ---------------------------------------------------------------------------
@@ -490,15 +924,14 @@ def compute_candidate_baseline(
 ) -> CandidateBaseline:
     """
     Stage 0: Calibrate candidate baseline on Question 0 ('Tell me about yourself')
-    using time-windowed median/MAD, Empirical Bayes shrinkage, and cached stylometric
-    fingerprinting to eliminate ESL/neurodivergent bias and catch stealth register jumps.
+    using time-windowed median/MAD, Empirical Bayes shrinkage, and length-invariant
+    stylometric fingerprinting (MATTR + syllable complexity + function-word entropy).
     """
     raw_tokens = WORD_TOKEN_RE.findall(q0_text or "")
     word_count = len(raw_tokens)
     dur_min = max(duration_ms / 60_000.0, 0.05)
     overall_wpm = word_count / dur_min
 
-    # Store private Q0 stylometric fingerprint for downstream stealth register-jump detection
     _store_style_profile(session_id, _extract_stylometric_profile(q0_text or ""))
 
     disfluency_count, _ = _count_natural_disfluencies(q0_text or "")
@@ -560,17 +993,22 @@ def compute_deterministic_heuristics(
     ttfs_latency_ms: int = 0,
     concurrent_vision_events: Optional[List[VisionAnomalyEvent]] = None,
     question_text: Optional[str] = None,
+    word_timings: Optional[Sequence[Any]] = None,
 ) -> HeuristicScores:
     """
     Stage 1: Sub-2ms multimodal forensic engine combining baseline-relative prosody,
-    stealth stylometric register-shift detection, verbalized-markdown spotting,
-    exculpatory engineering-scar credits, and orthogonal cross-modal synergy fusion.
+    cliche-free stealth prose convergence, reading-vs-thinking cognitive pause physics,
+    intra-turn stall-then-read bifurcation, MATTR/entropy register shifts,
+    question-intent-aware ownership, anti-gaming exculpatory credits, and 3-channel fusion.
     """
     safe_text = (answer_text or "").strip()
     tokens = WORD_TOKEN_RE.findall(safe_text)
     word_count = len(tokens)
     dur_min = max(duration_ms / 60_000.0, 0.05)
     curr_wpm = word_count / dur_min
+
+    # Derive inter-word gaps automatically if caller supplied word_timings without gaps
+    effective_gaps = inter_word_gaps if inter_word_gaps is not None else _derive_gaps_from_word_timings(word_timings)
 
     # 1. Robust WPM shift against calibrated baseline
     base_wpm = baseline.baseline_wpm if baseline else PRIOR_WPM
@@ -583,8 +1021,10 @@ def compute_deterministic_heuristics(
     base_disfluency = baseline.baseline_disfluency_rate if baseline else PRIOR_DISFLUENCY_RATE
     disfluency_drop = max(base_disfluency - curr_disfluency_rate, 0.0)
 
-    # 3. Trimmed Pause Cadence Uniformity CV + Stall-to-Flow Streaming Ratio
-    cadence_uniformity_cv, valid_pause_count, stall_to_flow = _compute_robust_cadence_cv(inter_word_gaps)
+    # 3. Trimmed Pause Cadence CV + Stall-to-Flow Ratio + Shannon Pause Entropy
+    cadence_uniformity_cv, valid_pause_count, stall_to_flow, pause_entropy = _compute_robust_cadence_cv(
+        effective_gaps
+    )
 
     # 4. Tiered Spoken LLM Tell Bank + Verbalized Markdown + Stylometric Register Shift
     ai_tell_matches: List[str] = []
@@ -620,7 +1060,6 @@ def compute_deterministic_heuristics(
         tell_cap = 30.0
     tell_risk = min(tell_risk, tell_cap)
 
-    # Stealth-AI structural signals (catch cliché-suppressed ChatGPT/Claude recitations)
     style_shift_pts, style_shift_reason = _compute_stylometric_shift(curr_style, base_style, word_count)
     has_verbal_enum = word_count >= 45 and bool(VERBAL_ENUMERATION_RE.search(safe_text))
     essay_frame_hits = len(ESSAY_FRAMING_RE.findall(safe_text)) if word_count >= 45 else 0
@@ -631,7 +1070,17 @@ def compute_deterministic_heuristics(
         else 0.0
     )
 
-    # 5. First-person narrative ownership density & opening question-mirroring stall
+    # Prompt-resistant stealth signals (catch cliche-free casual ChatGPT/Claude recitations)
+    stealth_prose_pts, stealth_cues = _compute_stealth_prose_signals(
+        safe_text, word_count, disfluency_count, self_repair_count
+    )
+    intraturn_pts, intraturn_reason = _compute_intraturn_bifurcation(safe_text, tokens, word_count)
+    reading_flat_pts, reading_flat_reason = _compute_cognitive_pause_flatness(
+        word_timings, curr_wpm, curr_disfluency_rate
+    )
+
+    # 5. Question-intent-aware first-person ownership & opening question-mirroring stall
+    q_intent = _classify_question_intent(question_text)
     first_person_matches = FIRST_PERSON_RE.findall(safe_text)
     first_person_ratio = len(first_person_matches) / max(word_count, 1)
     mirroring_ratio = _compute_question_mirroring_ratio(question_text, tokens)
@@ -640,7 +1089,7 @@ def compute_deterministic_heuristics(
     base_ttfs = baseline.baseline_ttfs_ms if baseline else PRIOR_TTFS_MS
     ttfs_excess_ms = max(0.0, float(ttfs_latency_ms) - max(base_ttfs, 1_000.0))
 
-    # 7. Severity-weighted concurrent vision telemetry
+    # 7. Burst-declustered, severity-weighted concurrent vision telemetry
     vision_risk, concurrent_vision_flags, vision_notes = _score_vision_events(concurrent_vision_events)
 
     # 8. STT-resilient spoken prompt-injection security scan
@@ -679,11 +1128,20 @@ def compute_deterministic_heuristics(
             f"Written-essay syntactic uniformity (enum={has_verbal_enum}, sents={sent_count})"
         )
 
-    if word_count >= 40 and first_person_ratio < 0.015:
-        ownership_pts = (
-            _linear_ramp(0.015 - first_person_ratio, low=0.0, high=0.015, max_points=7.0)
-            * _length_confidence(word_count, min_words=40, full_words=80, min_scale=0.45)
-        )
+    if stealth_prose_pts > 0.0:
+        linguistic_risk += stealth_prose_pts
+        trigger_reasons.append(f"Stealth prose convergence ({', '.join(stealth_cues)})")
+
+    if intraturn_pts > 0.0 and intraturn_reason:
+        linguistic_risk += intraturn_pts
+        trigger_reasons.append(intraturn_reason)
+
+    # Ownership deficit: zero penalty on pure conceptual definitions; stronger weight on experiential prompts
+    if q_intent != "CONCEPTUAL" and word_count >= 40 and first_person_ratio < 0.015:
+        max_own_pts = 10.0 if q_intent == "EXPERIENTIAL" else 7.0
+        own_ramp = _linear_ramp(0.015 - first_person_ratio, low=0.0, high=0.015, max_points=max_own_pts)
+        own_conf = _length_confidence(word_count, min_words=40, full_words=80, min_scale=0.45)
+        ownership_pts = own_ramp * own_conf
         if ownership_pts >= 2.0:
             linguistic_risk += ownership_pts
             trigger_reasons.append("Low personal ownership / first-person narrative markers")
@@ -694,10 +1152,9 @@ def compute_deterministic_heuristics(
 
     # Prosodic & Acoustic Channel
     if word_count >= 30 and disfluency_drop > 1.5:
-        disfluency_pts = (
-            _linear_ramp(disfluency_drop, low=1.5, high=4.5, max_points=22.0)
-            * _length_confidence(word_count, min_words=30, full_words=60, min_scale=0.40)
-        )
+        disf_ramp = _linear_ramp(disfluency_drop, low=1.5, high=4.5, max_points=22.0)
+        disf_conf = _length_confidence(word_count, min_words=30, full_words=60, min_scale=0.40)
+        disfluency_pts = disf_ramp * disf_conf
         if self_repair_count >= 2:
             disfluency_pts *= 0.5
         if disfluency_pts >= 4.0:
@@ -712,15 +1169,19 @@ def compute_deterministic_heuristics(
         trigger_reasons.append(f"Significant WPM shift vs baseline (Z={round(wpm_robust_zscore, 1)})")
 
     if word_count >= 35 and valid_pause_count >= 5 and cadence_uniformity_cv < 0.50:
-        cadence_pts = (
-            _linear_ramp(0.50 - cadence_uniformity_cv, low=0.0, high=0.25, max_points=14.0)
-            * _length_confidence(word_count, min_words=35, full_words=60, min_scale=0.45)
-        )
+        cad_ramp = _linear_ramp(0.50 - cadence_uniformity_cv, low=0.0, high=0.25, max_points=14.0)
+        cad_conf = _length_confidence(word_count, min_words=35, full_words=60, min_scale=0.45)
+        entropy_mult = 1.15 if pause_entropy < 0.55 else (0.85 if pause_entropy > 0.78 else 1.0)
+        cadence_pts = min(15.0, cad_ramp * cad_conf * entropy_mult)
         if cadence_pts >= 4.0:
             prosodic_risk += cadence_pts
             trigger_reasons.append(
-                f"Uniform pause cadence (CV={round(cadence_uniformity_cv, 2)}, n={valid_pause_count})"
+                f"Uniform pause cadence (CV={round(cadence_uniformity_cv, 2)}, H={round(pause_entropy, 2)}, n={valid_pause_count})"
             )
+
+    if reading_flat_pts > 0.0 and reading_flat_reason:
+        prosodic_risk += reading_flat_pts
+        trigger_reasons.append(reading_flat_reason)
 
     if word_count >= 45 and valid_pause_count >= 8 and stall_to_flow >= 2.2 and curr_disfluency_rate < 1.2:
         prosodic_risk += 6.0
@@ -729,10 +1190,9 @@ def compute_deterministic_heuristics(
         )
 
     if word_count >= 45 and ttfs_excess_ms >= 1_400.0 and curr_disfluency_rate < 0.8:
-        stall_pts = (
-            _linear_ramp(ttfs_excess_ms, low=1_400.0, high=3_500.0, max_points=12.0)
-            * _length_confidence(word_count, min_words=45, full_words=60, min_scale=0.65)
-        )
+        stall_ramp = _linear_ramp(ttfs_excess_ms, low=1_400.0, high=3_500.0, max_points=12.0)
+        stall_conf = _length_confidence(word_count, min_words=45, full_words=60, min_scale=0.65)
+        stall_pts = stall_ramp * stall_conf
         if stall_pts >= 3.0:
             prosodic_risk += stall_pts
             trigger_reasons.append(
@@ -760,13 +1220,15 @@ def compute_deterministic_heuristics(
         synergy_boost = 6.0
         trigger_reasons.append("Cross-modal corroboration across 2 independent forensic channels")
 
-    # Apply bounded exculpatory discount for genuine live-engineering scars & self-repairs
     exculpatory_credit = _compute_exculpatory_credit(
         text=safe_text,
         word_count=word_count,
         self_repair_count=self_repair_count,
         vision_risk=vision_risk,
         injection_detected=injection_detected,
+        tier_a_hits=tier_a_hits,
+        total_tell_hits=len(ai_tell_matches),
+        stealth_convergence=(stealth_prose_pts >= 7.0 and intraturn_pts >= 5.0),
     )
 
     raw_risk = linguistic_risk + prosodic_risk + vision_risk + security_risk + synergy_boost - exculpatory_credit
@@ -787,6 +1249,16 @@ def compute_deterministic_heuristics(
         or active_channels >= 2
         or (tier_a_hits >= 1 and disfluency_drop >= 2.0)
         or (style_shift_pts >= 8.0 and disfluency_drop >= 2.0)
+        or (
+            stealth_prose_pts >= 7.0
+            and (
+                disfluency_drop >= 1.8
+                or reading_flat_pts >= 4.0
+                or style_shift_pts >= 5.0
+                or intraturn_pts >= 5.0
+            )
+        )
+        or (intraturn_pts >= 6.0 and reading_flat_pts >= 4.0)
         or (disfluency_drop >= (2.5 if word_count >= 60 else 3.5) and curr_disfluency_rate < 1.0)
         or (ttfs_excess_ms >= 1_800.0 and curr_disfluency_rate < 0.5)
     ):
