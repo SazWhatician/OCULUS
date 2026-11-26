@@ -65,6 +65,11 @@ async def create_session(req: CreateSessionRequest, db: AsyncSession = Depends(g
             meeting_url=req.meeting_url,
             bot_name=req.bot_display_name,
         )
+        if dispatch_res.get("status") == "FAILED":
+            raise HTTPException(
+                status_code=502,
+                detail=f"Attendee bot failed to dispatch: {dispatch_res.get('error', 'Unknown error')}",
+            )
         bot_external_id = dispatch_res.get("bot_id")
         initial_status = SessionStatus.WAITING_IN_LOBBY
 
@@ -279,15 +284,19 @@ async def swap_speakers(session_id: str, req: SwapSpeakerRequest, db: AsyncSessi
     if not s:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    prev_map = {str(k): _safe_speaker_role_str(v) for k, v in (s.speaker_role_map or {}).items()}
     normalized_map = {str(k): _safe_speaker_role_str(v) for k, v in req.speaker_role_map.items()}
     s.speaker_role_map = normalized_map
 
-    # Update any open buffered utterance in the active stitcher
+    # Update active diarizer voiceprints + open buffered utterance if speaker roles changed
     stt_w = get_active_stt_worker()
     if stt_w is not None:
-        open_utt = stt_w.stitcher.get_open_utterance(session_id)
-        if open_utt is not None and open_utt.speaker_label in normalized_map:
-            open_utt.speaker = SpeakerRole(normalized_map[open_utt.speaker_label])
+        if prev_map != normalized_map:
+            await stt_w.swap_session_roles(session_id, normalized_map)
+        else:
+            open_utt = stt_w.stitcher.get_open_utterance(session_id)
+            if open_utt is not None and open_utt.speaker_label in normalized_map:
+                open_utt.speaker = SpeakerRole(normalized_map[open_utt.speaker_label])
 
     # Retroactively remap persisted utterances in DB
     utt_stmt = (
