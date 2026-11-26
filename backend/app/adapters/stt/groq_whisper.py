@@ -67,21 +67,21 @@ class GroqWhisperAdapter(STTAdapter):
         ext, mime = detect_audio_format(audio_bytes)
         prompt = self._build_vocab_prompt(custom_vocab)
 
-        form_fields: List[tuple[str, str]] = [
-            ("model", self.model),
-            ("response_format", "verbose_json"),
-            ("temperature", "0"),
-            ("timestamp_granularities[]", "word"),
-            ("timestamp_granularities[]", "segment"),
+        multipart_files: List[tuple[str, Any]] = [
+            ("file", (f"audio.{ext}", audio_bytes, mime)),
+            ("model", (None, self.model)),
+            ("response_format", (None, "verbose_json")),
+            ("temperature", (None, "0")),
+            ("timestamp_granularities[]", (None, "word")),
+            ("timestamp_granularities[]", (None, "segment")),
         ]
         if prompt:
-            form_fields.append(("prompt", prompt))
+            multipart_files.append(("prompt", (None, prompt)))
 
         client = self._get_client()
         for attempt in range(self.max_retries + 1):
             try:
-                files = {"file": (f"audio.{ext}", audio_bytes, mime)}
-                res = await client.post(GROQ_TRANSCRIBE_URL, data=form_fields, files=files)
+                res = await client.post(GROQ_TRANSCRIBE_URL, files=multipart_files)
 
                 if res.status_code in (429, 500, 502, 503, 504) and attempt < self.max_retries:
                     backoff = self._backoff_seconds(res.headers.get("Retry-After"), attempt)
