@@ -21,14 +21,21 @@ UPLOAD_CHUNK_BYTES = 1024 * 1024
 @router.post("/webhooks/attendee")
 async def attendee_webhook(request: Request):
     signature = (
-        request.headers.get("X-Attendee-Signature")
+        request.headers.get("X-Webhook-Signature")
+        or request.headers.get("X-Attendee-Signature")
         or request.headers.get("Attendee-Signature")
         or ""
     )
     raw_body = await request.body()
 
     if not attendee_adapter.verify_webhook_signature(signature, raw_body):
-        raise HTTPException(status_code=401, detail="Invalid webhook signature")
+        allow_dev = bool(
+            settings.APP_ENV == "development"
+            and getattr(settings, "ATTENDEE_WEBHOOK_ALLOW_INSECURE_DEV", False)
+            and not getattr(settings, "ATTENDEE_WEBHOOK_SECRET", "")
+        )
+        if not allow_dev:
+            raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
     payload = await request.json()
     await attendee_adapter.handle_webhook_event(payload)
