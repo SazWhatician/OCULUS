@@ -16,8 +16,11 @@ for _secret_var in (
     "GEMINI_API_KEY",
     "SPEECHMATICS_API_KEY",
     "ATTENDEE_API_KEY",
+    "ATTENDEE_WEBHOOK_SECRET",
 ):
     os.environ[_secret_var] = ""
+os.environ["ATTENDEE_WEBHOOK_ALLOW_INSECURE_DEV"] = "false"
+os.environ["ENABLE_VISION_MODEL_AUTO_DOWNLOAD"] = "false"
 
 import app.db.postgres as _pg  # noqa: E402
 
