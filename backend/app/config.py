@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str = ""
     GEMINI_API_KEY: str = ""
     ATTENDEE_API_KEY: str = ""
+    ATTENDEE_WEBHOOK_SECRET: str = ""
     ATTENDEE_BASE_URL: str = "https://app.attendee.dev"
     PUBLIC_API_URL: str = "http://localhost:8000"
 
@@ -51,6 +52,11 @@ class Settings(BaseSettings):
 
     # Numeric Engineering Thresholds
     STITCH_GAP_MAX_MS: int = 2500
+    STITCH_HARD_GAP_MAX_MS: int = 6500
+    STT_IDLE_FLUSH_SECONDS: float = 8.0
+    MEDIAPIPE_FACE_LANDMARKER_MODEL: Optional[str] = None
+    OPENCV_YUNET_MODEL: Optional[str] = None
+    ENABLE_VISION_MODEL_AUTO_DOWNLOAD: bool = True
     VISION_FPS: int = 1
     VISION_ANOMALY_DURATION_MS: int = 3000
     VISION_NORMAL_RESET_MS: int = 1000
@@ -64,8 +70,8 @@ class Settings(BaseSettings):
     LLM_ALLOW_MOCK_FALLBACK: bool = True
     LLM_PROVIDER_TIMEOUT_SECONDS: float = 22.0
     LLM_HIGH_RISK_CONSENSUS: bool = False
-    GROQ_PRIMARY_MODEL: str = "llama-3.3-70b-versatile"
-    GROQ_FALLBACK_MODELS: str = "qwen/qwen3-32b,llama-3.1-8b-instant"
+    GROQ_PRIMARY_MODEL: str = "openai/gpt-oss-120b"
+    GROQ_FALLBACK_MODELS: str = "openai/gpt-oss-20b,qwen/qwen3.8-27b"
     GROQ_WHISPER_MODEL: str = "whisper-large-v3-turbo"
     GROQ_MAX_RETRIES: int = 2
     GEMINI_TEXT_MODEL: str = "gemini-3.8-flash"
@@ -85,6 +91,7 @@ class Settings(BaseSettings):
     PROCTORING_MAX_LLM_TURNS: int = 8
     PROCTORING_LLM_CONCURRENCY: int = 2
     SCORING_MAX_LLM_TURNS: int = 8
+    SCORING_LLM_CONCURRENCY: int = 1
     SCORING_IDLE_FLUSH_SECONDS: float = 18.0
     SCORING_SESSION_TTL_SECONDS: float = 900.0
 
