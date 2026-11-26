@@ -20,10 +20,10 @@ from app.schemas.contracts import (
 logger = logging.getLogger("oculus.llm.groq")
 
 # Deterministic defaults (all overridable via app.config.settings)
-DEFAULT_PRIMARY_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_PRIMARY_MODEL = "openai/gpt-oss-120b"
 DEFAULT_FALLBACK_MODELS = (
-    "qwen/qwen3-32b",
-    "llama-3.1-8b-instant",
+    "openai/gpt-oss-20b",
+    "qwen/qwen3.8-27b",
 )
 GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 
@@ -199,6 +199,7 @@ class GroqJudgeAdapter(LLMJudgeAdapter):
 
     async def _invoke_with_retries(self, model_name: str, user_prompt: str) -> dict[str, Any]:
         client = self._get_client()
+        is_reasoning = any(tag in model_name.lower() for tag in ("qwen3", "deepseek-r1", "gpt-oss"))
         payload: dict[str, Any] = {
             "model": model_name,
             "messages": [
@@ -208,11 +209,11 @@ class GroqJudgeAdapter(LLMJudgeAdapter):
             "response_format": {"type": "json_object"},
             "temperature": 0.0,
             "seed": 42,
-            "max_tokens": 1_100,
+            "max_tokens": 1_800 if is_reasoning else 1_100,
         }
 
         # Hide chain-of-thought wrapper tokens if invoking Qwen3/DeepSeek reasoning models on Groq
-        if any(tag in model_name.lower() for tag in ("qwen3", "deepseek-r1")):
+        if is_reasoning:
             payload["reasoning_format"] = "hidden"
 
         for attempt in range(self.max_retries + 1):
