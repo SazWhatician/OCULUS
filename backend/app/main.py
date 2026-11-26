@@ -81,6 +81,7 @@ app.include_router(webhooks.router)
 app.include_router(ws.router)
 
 
+@app.get("/")
 @app.get("/healthz")
 async def health_check():
     return {
