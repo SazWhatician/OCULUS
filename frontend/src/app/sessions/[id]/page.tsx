@@ -25,6 +25,20 @@ interface VisionEventItem {
   evidence_url?: string;
 }
 
+interface VisionTelemetryItem {
+  timestamp_ms: number;
+  engine: string;
+  camera_active: boolean;
+  faces_detected: number;
+  gaze_direction: string;
+  gaze_offset_x: number;
+  gaze_offset_y: number;
+  head_pose_yaw: number;
+  head_pose_pitch: number;
+  head_pose_roll: number;
+  liveness_score: number;
+}
+
 interface QAEvalItem {
   qa_index: number;
   question_text: string;
@@ -63,6 +77,7 @@ export default function LiveSentinelPage() {
 
   const [utterances, setUtterances] = useState<UtteranceItem[]>([]);
   const [visionEvents, setVisionEvents] = useState<VisionEventItem[]>([]);
+  const [visionTelemetry, setVisionTelemetry] = useState<VisionTelemetryItem | null>(null);
   const [qaEvaluations, setQaEvaluations] = useState<QAEvalItem[]>([]);
 
   const [filterSpeaker, setFilterSpeaker] = useState<"ALL" | "candidate" | "interviewer">("ALL");
@@ -167,6 +182,8 @@ export default function LiveSentinelPage() {
           setRiskBand(data.risk_band || "LOW");
         } else if (eventType === "BASELINE_CALIBRATED" && data) {
           setBaseline(data);
+        } else if (eventType === "VISION_TELEMETRY" && data) {
+          setVisionTelemetry(data);
         } else if (eventType === "VISION_ANOMALY" && data) {
           setVisionEvents((prev) => {
             const exists = prev.some((v) => v.event_id === data.event_id);
@@ -241,7 +258,10 @@ export default function LiveSentinelPage() {
 
   const isThisSessionStreaming = captureTelemetry.active && captureTelemetry.sessionId === sessionId;
   const hasVisionActivity =
-    (isThisSessionStreaming && captureTelemetry.framesSent > 0) || visionEvents.length > 0 || status === "COMPLETED";
+    (isThisSessionStreaming && captureTelemetry.framesSent > 0) ||
+    visionTelemetry !== null ||
+    visionEvents.length > 0 ||
+    status === "COMPLETED";
   const latestVisionFlag = visionEvents[visionEvents.length - 1];
   const latestGazeFlag = [...visionEvents]
     .reverse()
@@ -650,6 +670,8 @@ export default function LiveSentinelPage() {
                     ? `FLAGGED: ${latestVisionFlag.anomaly_type}`
                     : isThisSessionStreaming
                     ? `STREAMING · ${captureTelemetry.framesSent}F / ${captureTelemetry.chunksSent}A`
+                    : visionTelemetry
+                    ? `TRACKING · ${visionTelemetry.engine.toUpperCase()}`
                     : status === "COMPLETED"
                     ? "MONITORING CONCLUDED"
                     : session?.ingestion_mode === "demo_file"
@@ -678,7 +700,11 @@ export default function LiveSentinelPage() {
                 <div className="text-center space-y-1 font-mono">
                   <span className="text-2xl text-[var(--oculus-ink)] opacity-60">◎</span>
                   <span className="text-[10.5px] uppercase tracking-[0.22em] font-semibold text-[var(--oculus-ink)] block">
-                    OPENCV OPTICAL GAZE TRACKER
+                    {visionTelemetry?.engine === "mediapipe_tasks" || visionTelemetry?.engine === "mediapipe_facemesh"
+                      ? "MEDIAPIPE 478-PT 3D TRACKER"
+                      : visionTelemetry?.engine === "opencv_yunet"
+                      ? "OPENCV YUNET 5-PT SOLVEPNP"
+                      : "OPENCV OPTICAL GAZE TRACKER"}
                   </span>
                   <span className="text-[9px] uppercase tracking-[0.18em] text-[var(--oculus-muted)] block">
                     3-TIER FUNNEL // CPU OPTIMIZED
@@ -696,6 +722,8 @@ export default function LiveSentinelPage() {
                     ? latestGazeFlag.anomaly_type === "TELEPROMPTER_READING"
                       ? "SCRIPT SCAN"
                       : "OFF-AXIS"
+                    : visionTelemetry
+                    ? `${visionTelemetry.gaze_direction.toUpperCase()} (${visionTelemetry.gaze_offset_x >= 0 ? "+" : ""}${Math.round(visionTelemetry.gaze_offset_x * 35)}°)`
                     : hasVisionActivity
                     ? "CENTERED"
                     : "IDLE"}
@@ -708,6 +736,8 @@ export default function LiveSentinelPage() {
                     ? latestPoseFlag.anomaly_type === "CAMERA_OCCLUSION"
                       ? "OCCLUDED"
                       : "PITCH SHIFT"
+                    : visionTelemetry
+                    ? `${Math.round(visionTelemetry.head_pose_yaw)}°Y / ${Math.round(visionTelemetry.head_pose_pitch)}°P`
                     : hasVisionActivity
                     ? "ALIGNED"
                     : "IDLE"}
@@ -722,6 +752,8 @@ export default function LiveSentinelPage() {
                       : latestSubjectFlag.anomaly_type === "ABSENT_FACE"
                       ? "0 FACES"
                       : "SPOOF RISK"
+                    : visionTelemetry
+                    ? `${visionTelemetry.faces_detected} ${visionTelemetry.faces_detected === 1 ? "FACE" : "FACES"}`
                     : hasVisionActivity
                     ? "1 FACE"
                     : "IDLE"}
